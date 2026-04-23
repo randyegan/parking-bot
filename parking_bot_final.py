@@ -394,24 +394,28 @@ def update_parking_board() -> None:
 # -----------------------------
 def display_line_for_spot(spot: SpotRecord) -> str:
     if spot.state == "open":
-        status = "Open"
+        status = "🟢 Open"
+
     elif spot.state == "held_user":
-        if spot.held_for_user_id == RANDY_ID:
-            status = "Held for @Randy"
-        elif spot.held_for_user_id == KYLIE_ID:
-            status = "Held for @Kylie"
+        if spot.held_for_user_id in DISPLAY_NAMES:
+            name = DISPLAY_NAMES[spot.held_for_user_id]
         else:
-            status = f"Held for <@{spot.held_for_user_id}>"
+            name = f"<@{spot.held_for_user_id}>"
+        status = f"🟡 Held for {name}"
+
     elif spot.state == "held_group":
         if spot.held_for_group == CINOVA_GROUP_KEY:
-            status = "Held for Cinova users"
+            status = "🟡 Held for Cinova users"
         else:
-            status = "Held"
+            status = "🟡 Held"
+
     elif spot.state == "reserved":
         if spot.reserved_for_user_id in DISPLAY_NAMES:
-            status = f"Booked by {DISPLAY_NAMES[spot.reserved_for_user_id]}"
+            name = DISPLAY_NAMES[spot.reserved_for_user_id]
         else:
-            status = f"Booked by <@{spot.reserved_for_user_id}>"
+            name = f"<@{spot.reserved_for_user_id}>"
+        status = f"🔴 Booked by {name}"
+
     else:
         status = spot.state
 
