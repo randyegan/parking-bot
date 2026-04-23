@@ -568,10 +568,16 @@ import json
 async def slack_events(req: Request):
     body = await req.body()
 
-    # 🔥 Only handle Slack verification manually
-    if b'"type":"url_verification"' in body:
+    # ✅ Only intercept Slack verification
+    try:
         payload = json.loads(body.decode("utf-8"))
-        return PlainTextResponse(payload["challenge"], status_code=200)
+
+        if payload.get("type") == "url_verification":
+            return PlainTextResponse(payload["challenge"], status_code=200)
+
+    except Exception:
+        # Not JSON → it's a button / command → let Bolt handle it
+        pass
 
     # ✅ EVERYTHING else goes to Slack Bolt
     return await handler.handle(req)
