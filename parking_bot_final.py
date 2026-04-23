@@ -1,13 +1,14 @@
+
 from __future__ import annotations
 
 import os
 import json
 import sqlite3
 from contextlib import asynccontextmanager, closing
-from datetime import datetime
-from zoneinfo import ZoneInfo
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional, List
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
@@ -322,7 +323,10 @@ def post_channel_update(text: str) -> None:
         return
 
     try:
-        slack_app.client.chat_postMessage(channel=PARKING_CHANNEL_ID, text=f":parking: {text}")
+        slack_app.client.chat_postMessage(
+            channel=PARKING_CHANNEL_ID,
+            text=f":parking: {text}",
+        )
     except Exception:
         pass
 
@@ -373,6 +377,26 @@ def publish_home_all_users() -> None:
 # -----------------------------
 # Parking logic
 # -----------------------------
+def has_any_available_spot_for_user(user_id: str) -> bool:
+    if user_id in MANAGEMENT_DEFAULTS:
+        management_spot = MANAGEMENT_DEFAULTS[user_id]
+        spot = get_spot(management_spot)
+        if spot.state == "held_user" and spot.held_for_user_id == user_id:
+            return True
+
+    if user_id in CINOVA_USER_IDS:
+        t1 = get_spot(T1)
+        if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
+            return True
+
+    for spot_id in SPOT_ORDER:
+        spot = get_spot(spot_id)
+        if spot.state == "open":
+            return True
+
+    return False
+
+
 def reserve_for_user(user_id: str) -> str:
     existing = get_user_booked_spot(user_id)
     if existing:
@@ -442,6 +466,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
         status = spot.state
 
     return f"{spot.spot_id} - {status}"
+
 
 def parking_home_blocks(user_id: str) -> list:
     booked_spot = get_user_booked_spot(user_id)
@@ -519,28 +544,6 @@ def parking_home_blocks(user_id: str) -> list:
 
     return blocks
 
-
-def has_any_available_spot_for_user(user_id: str) -> bool:
-    # Management users can claim their own held spot
-    if user_id in MANAGEMENT_DEFAULTS:
-        management_spot = MANAGEMENT_DEFAULTS[user_id]
-        spot = get_spot(management_spot)
-        if spot.state == "held_user" and spot.held_for_user_id == user_id:
-            return True
-
-    # Cinova users can claim T1 when it is group-held
-    if user_id in CINOVA_USER_IDS:
-        t1 = get_spot(T1)
-        if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
-            return True
-
-    # Anyone can claim open spots
-    for spot_id in SPOT_ORDER:
-        spot = get_spot(spot_id)
-        if spot.state == "open":
-            return True
-
-    return False
 
 # -----------------------------
 # Slack handlers
