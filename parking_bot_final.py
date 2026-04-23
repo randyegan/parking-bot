@@ -445,11 +445,13 @@ def display_line_for_spot(spot: SpotRecord) -> str:
 
 
 def parking_home_blocks(user_id: str) -> list:
-    booked_spot = get_user_booked_spot(user_id)
-    if booked_spot:
-        booking_text = f"You have Spot {booked_spot} today."
-    else:
-        booking_text = "You do not have a booking today."
+   booked_spot = get_user_booked_spot(user_id)
+if booked_spot:
+    booking_text = f"You have Spot {booked_spot} today."
+elif has_any_available_spot_for_user(user_id):
+    booking_text = "You do not have a booking today."
+else:
+    booking_text = "Sorry, all spots are reserved for today."
 
     refreshed = local_now().strftime("%-I:%M:%S %p")
     notif_text = "Notifications: On" if notifications_enabled(user_id) else "Notifications: Off"
@@ -517,6 +519,27 @@ def parking_home_blocks(user_id: str) -> list:
 
     return blocks
 
+def has_any_available_spot_for_user(user_id: str) -> bool:
+    # Management users can claim their own held spot
+    if user_id in MANAGEMENT_DEFAULTS:
+        management_spot = MANAGEMENT_DEFAULTS[user_id]
+        spot = get_spot(management_spot)
+        if spot.state == "held_user" and spot.held_for_user_id == user_id:
+            return True
+
+    # Cinova users can claim T1 when it is group-held
+    if user_id in CINOVA_USER_IDS:
+        t1 = get_spot(T1)
+        if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
+            return True
+
+    # Anyone can claim open spots
+    for spot_id in SPOT_ORDER:
+        spot = get_spot(spot_id)
+        if spot.state == "open":
+            return True
+
+    return False
 
 # -----------------------------
 # Slack handlers
