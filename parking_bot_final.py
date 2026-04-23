@@ -18,20 +18,7 @@ Features:
     T1 -> Held for Cinova users
 - No use of respond() in App Home actions
 """
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 
-api = FastAPI()
-
-@api.post("/slack/events")
-async def slack_events(req: Request):
-    payload = await req.json()
-
-    # Slack URL verification
-    if payload.get("type") == "url_verification":
-        return JSONResponse({"challenge": payload["challenge"]})
-
-    return await handler.handle(req)
     
 from __future__ import annotations
 
@@ -48,6 +35,20 @@ from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+api = FastAPI()
+
+@api.post("/slack/events")
+async def slack_events(req: Request):
+    payload = await req.json()
+
+    # Slack URL verification
+    if payload.get("type") == "url_verification":
+        return JSONResponse({"challenge": payload["challenge"]})
+
+    return await handler.handle(req)
 
 # -----------------------------
 # Environment / config
