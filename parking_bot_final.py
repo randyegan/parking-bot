@@ -570,7 +570,14 @@ def scheduled_5pm_reset() -> None:
 # -----------------------------
 # Startup
 # -----------------------------
-init_db()
+_db_dir = os.path.dirname(DATABASE_PATH)
+if _db_dir:
+    os.makedirs(_db_dir, exist_ok=True)
+
+try:
+    init_db()
+except Exception as e:
+    print(f"Error initializing database: {e}", flush=True)
 
 scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
 scheduler.add_job(scheduled_5pm_reset, "cron", hour=17, minute=0)
