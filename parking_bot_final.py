@@ -582,8 +582,9 @@ def release_today_action(ack, body):
     publish_home_all_users()
     maybe_dm(user_id, f":parking: {message}")
 
-    who = DISPLAY_NAMES.get(user_id, f"<@{user_id}>")
-    post_channel_update(f"{who}: {message}")
+    if message.startswith("Spot "):
+        who = DISPLAY_NAMES.get(user_id, f"<@{user_id}>")
+        post_channel_update(f"{who} released {message.replace(' is now open.', '')}.")
 
 @slack_app.action("refresh_home")
 def refresh_home_action(ack, body):
