@@ -613,8 +613,33 @@ def on_app_home_opened(event, logger):
 @slack_app.command("/parking")
 def parking_command(ack, body):
     ack()
-    publish_home(body["user_id"])
-    update_parking_board()
+
+    user_id = body["user_id"]
+    text = body.get("text", "").strip().lower()
+
+    if text in ["reserve", "book"]:
+        message = reserve_for_user(user_id)
+        publish_home_all_users()
+        update_parking_board()
+        maybe_dm(user_id, f":parking: {message}")
+        return
+
+    if text in ["release", "cancel"]:
+        message = release_for_user(user_id)
+        publish_home_all_users()
+        update_parking_board()
+        maybe_dm(user_id, f":parking: {message}")
+        return
+
+    if text in ["refresh", "status", ""]:
+        publish_home(user_id)
+        update_parking_board()
+        return
+
+    maybe_dm(
+        user_id,
+        ":parking: Try `/parking reserve`, `/parking release`, or `/parking refresh`."
+    )
 
 
 @slack_app.action("reserve_today")
