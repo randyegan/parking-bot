@@ -186,7 +186,7 @@ def board_text():
 
         lines.append(f"{s.spot_id} - {status}")
 
-    lines.append(f"\n_Last updated: {datetime.now().strftime('%-I:%M %p')}_")
+    lines.append(f"\n_Last updated: {datetime.now(ZoneInfo(PARKING_TIMEZONE)).strftime('%-I:%M %p')}_")
     return "\n".join(lines)
 
 
