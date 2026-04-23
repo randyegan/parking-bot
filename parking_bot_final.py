@@ -563,18 +563,18 @@ def health():
 
 @api.post("/slack/events")
 async def slack_events(req: Request):
-    # Handle Slack URL verification explicitly
     raw_body = await req.body()
 
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
-        payload = {}
+        return PlainTextResponse("Invalid request", status_code=400)
 
+    # Slack URL verification
     if payload.get("type") == "url_verification":
-        return JSONResponse({"challenge": payload["challenge"]})
+        return PlainTextResponse(payload["challenge"], status_code=200)
 
-    # All normal Slack requests go to Bolt
+    # Everything else goes to Bolt
     return await handler.handle(req)
 
 
