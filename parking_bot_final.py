@@ -561,20 +561,22 @@ def health():
     return {"ok": True, "time": local_now().isoformat()}
 
 
+from fastapi.responses import PlainTextResponse
+
 @api.post("/slack/events")
 async def slack_events(req: Request):
-    raw_body = await req.body()
+    body = await req.body()
 
     try:
-        payload = json.loads(raw_body.decode("utf-8"))
+        payload = json.loads(body.decode("utf-8"))
     except Exception:
-        return PlainTextResponse("Invalid request", status_code=400)
+        return PlainTextResponse("Bad request", status_code=400)
 
-    # Slack URL verification
+    # 🔥 CRITICAL: handle Slack verification BEFORE Bolt
     if payload.get("type") == "url_verification":
         return PlainTextResponse(payload["challenge"], status_code=200)
 
-    # Everything else goes to Bolt
+    # Everything else goes to Slack Bolt
     return await handler.handle(req)
 
 
