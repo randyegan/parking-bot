@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import os
+import json
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -9,16 +9,16 @@ from datetime import datetime
 from typing import Optional, List
 from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
+from apscheduler.schedulers.background import BackgroundScheduler
 
 
-# =========================================================
-# CONFIG
-# =========================================================
+# -----------------------------
+# Environment
+# -----------------------------
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
 PARKING_TIMEZONE = os.getenv("PARKING_TIMEZONE", "America/Vancouver")
@@ -28,9 +28,9 @@ if not SLACK_BOT_TOKEN or not SLACK_SIGNING_SECRET:
     raise RuntimeError("SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET must be set")
 
 
-# =========================================================
-# USERS / SPOTS
-# =========================================================
+# -----------------------------
+# IDs and spot names
+# -----------------------------
 RANDY_ID = "U1HMCS77V"
 KYLIE_ID = "UR0JZ0GR0"
 MIKE_ID = "U03EH8HM4G0"
@@ -44,6 +44,7 @@ P3 = "P3"
 T1 = "T1"
 
 SPOT_ORDER = [M1, M2, P1, P2, P3, T1]
+P_SPOTS = [P1, P2, P3]
 
 DISPLAY_NAMES = {
     RANDY_ID: "@Randy",
@@ -58,20 +59,19 @@ MANAGEMENT_DEFAULTS = {
 }
 
 CINOVA_USER_IDS = {MIKE_ID, PETER_ID}
-CINOVA_GROUP_KEY = "cinova"
 
 
-# =========================================================
-# SLACK + FASTAPI
-# =========================================================
+# -----------------------------
+# Slack / FastAPI
+# -----------------------------
 slack_app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
 handler = SlackRequestHandler(slack_app)
 api = FastAPI(title="Parking Bot")
 
 
-# =========================================================
-# DATABASE
-# =========================================================
+# -----------------------------
+# Models
+# -----------------------------
 @dataclass
 class SpotRecord:
     spot_id: str
@@ -81,41 +81,40 @@ class SpotRecord:
     held_for_group: Optional[str]
 
 
+# -----------------------------
+# Helpers
+# -----------------------------
+def local_now() -> datetime:
+    return datetime.now(ZoneInfo(PARKING_TIMEZONE))
+
+
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def local_now() -> datetime:
-    return datetime.now(ZoneInfo(PARKING_TIMEZONE))
-
-
 def init_db() -> None:
     with closing(get_db()) as conn:
         cur = conn.cursor()
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS reservations (
-                spot_id TEXT PRIMARY KEY,
-                state TEXT NOT NULL,
-                reserved_for_user_id TEXT,
-                held_for_user_id TEXT,
-                held_for_group TEXT,
-                updated_at TEXT NOT NULL
-            )
-            """
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS reservations (
+            spot_id TEXT PRIMARY KEY,
+            state TEXT NOT NULL,
+            reserved_for_user_id TEXT,
+            held_for_user_id TEXT,
+            held_for_group TEXT,
+            updated_at TEXT NOT NULL
         )
+        """)
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_prefs (
-                slack_user_id TEXT PRIMARY KEY,
-                notifications_enabled INTEGER NOT NULL DEFAULT 1
-            )
-            """
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_prefs (
+            slack_user_id TEXT PRIMARY KEY,
+            notifications_enabled INTEGER NOT NULL DEFAULT 1
         )
+        """)
 
         now = local_now().isoformat()
 
@@ -125,7 +124,7 @@ def init_db() -> None:
             P1: ("open", None, None, None),
             P2: ("open", None, None, None),
             P3: ("open", None, None, None),
-            T1: ("held_group", None, None, CINOVA_GROUP_KEY),
+            T1: ("held_group", None, None, "cinova"),
         }
 
         for spot_id in SPOT_ORDER:
@@ -134,7 +133,7 @@ def init_db() -> None:
                 (spot_id,),
             ).fetchone()
 
-            if row is None:
+            if not row:
                 state, reserved_for_user_id, held_for_user_id, held_for_group = defaults[spot_id]
                 cur.execute(
                     """
@@ -262,8 +261,9 @@ def notifications_enabled(user_id: str) -> bool:
             (user_id,),
         ).fetchone()
 
-    if row is None:
+    if not row:
         return True
+
     return bool(row["notifications_enabled"])
 
 
@@ -306,21 +306,19 @@ def toggle_notifications_for_user(user_id: str) -> bool:
 def maybe_dm(user_id: str, text: str) -> None:
     if not notifications_enabled(user_id):
         return
+
     try:
         slack_app.client.chat_postMessage(channel=user_id, text=text)
     except Exception:
         pass
 
 
-# =========================================================
-# BUSINESS LOGIC
-# =========================================================
 def reserve_for_user(user_id: str) -> str:
     existing = get_user_booked_spot(user_id)
     if existing:
         return f"You have Spot {existing} today."
 
-    # Let management users claim their own held spot first
+    # 1. User claims their own management hold
     if user_id in MANAGEMENT_DEFAULTS:
         management_spot = MANAGEMENT_DEFAULTS[user_id]
         spot = get_spot(management_spot)
@@ -328,14 +326,14 @@ def reserve_for_user(user_id: str) -> str:
             set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
             return f"You have Spot {management_spot} today."
 
-    # Let Cinova users claim T1 if it is group-held
+    # 2. Cinova users can claim T1 if held for Cinova
     if user_id in CINOVA_USER_IDS:
-        spot = get_spot(T1)
-        if spot.state == "held_group" and spot.held_for_group == CINOVA_GROUP_KEY:
+        t1 = get_spot(T1)
+        if t1.state == "held_group" and t1.held_for_group == "cinova":
             set_spot_state(T1, "reserved", reserved_for_user_id=user_id)
             return f"You have Spot {T1} today."
 
-    # Otherwise book first open spot
+    # 3. Otherwise take first open spot
     for spot_id in SPOT_ORDER:
         spot = get_spot(spot_id)
         if spot.state == "open":
@@ -350,7 +348,9 @@ def cancel_for_user(user_id: str) -> str:
     if not booked_spot:
         return "You do not have a booking to cancel."
 
-    # Per your request, cancel makes the spot Open immediately
+    # Per your requested behavior:
+    # if M1 or M2 is cancelled manually, it becomes Open right away
+    # same behavior for all spots
     set_spot_state(booked_spot, "open")
     return f"Spot {booked_spot} is now open."
 
@@ -361,7 +361,7 @@ def reset_for_5pm() -> None:
     set_spot_state(P1, "open")
     set_spot_state(P2, "open")
     set_spot_state(P3, "open")
-    set_spot_state(T1, "held_group", held_for_group=CINOVA_GROUP_KEY)
+    set_spot_state(T1, "held_group", held_for_group="cinova")
 
 
 def display_line_for_spot(spot: SpotRecord) -> str:
@@ -375,22 +375,21 @@ def display_line_for_spot(spot: SpotRecord) -> str:
         else:
             status = f"Held for <@{spot.held_for_user_id}>"
     elif spot.state == "held_group":
-        if spot.held_for_group == CINOVA_GROUP_KEY:
+        if spot.held_for_group == "cinova":
             status = "Held for Cinova users"
         else:
             status = "Held"
     elif spot.state == "reserved":
-        display = DISPLAY_NAMES.get(spot.reserved_for_user_id, f"<@{spot.reserved_for_user_id}>")
-        status = f"Booked by {display}"
+        if spot.reserved_for_user_id in DISPLAY_NAMES:
+            status = f"Booked by {DISPLAY_NAMES[spot.reserved_for_user_id]}"
+        else:
+            status = f"Booked by <@{spot.reserved_for_user_id}>"
     else:
         status = spot.state
 
     return f"*{spot.spot_id}*\n{status}"
 
 
-# =========================================================
-# HOME TAB UI
-# =========================================================
 def parking_home_blocks(user_id: str) -> list:
     booked_spot = get_user_booked_spot(user_id)
     if booked_spot:
@@ -472,9 +471,9 @@ def publish_home(user_id: str) -> None:
     )
 
 
-# =========================================================
-# SLACK HANDLERS
-# =========================================================
+# -----------------------------
+# Slack event handlers
+# -----------------------------
 @slack_app.event("app_home_opened")
 def on_app_home_opened(event, logger):
     user_id = event["user"]
@@ -485,7 +484,8 @@ def on_app_home_opened(event, logger):
 @slack_app.command("/parking")
 def parking_command(ack, body):
     ack()
-    publish_home(body["user_id"])
+    user_id = body["user_id"]
+    publish_home(user_id)
 
 
 @slack_app.action("reserve_today")
@@ -509,28 +509,29 @@ def cancel_today_action(ack, body):
 @slack_app.action("refresh_home")
 def refresh_home_action(ack, body):
     ack()
-    publish_home(body["user"]["id"])
+    user_id = body["user"]["id"]
+    publish_home(user_id)
 
 
 @slack_app.action("toggle_notifications")
 def toggle_notifications_action(ack, body):
     ack()
     user_id = body["user"]["id"]
-    enabled = toggle_notifications_for_user(user_id)
+    now_enabled = toggle_notifications_for_user(user_id)
     publish_home(user_id)
 
     try:
         slack_app.client.chat_postMessage(
             channel=user_id,
-            text="Notifications turned on." if enabled else "Notifications turned off.",
+            text="Notifications turned on." if now_enabled else "Notifications turned off.",
         )
     except Exception:
         pass
 
 
-# =========================================================
-# FASTAPI ROUTES
-# =========================================================
+# -----------------------------
+# FastAPI routes
+# -----------------------------
 @api.get("/")
 def root():
     return {"status": "Parking bot is running"}
@@ -538,4 +539,39 @@ def root():
 
 @api.get("/health")
 def health():
-    return {"ok": True
+    return {"ok": True, "time": local_now().isoformat()}
+
+
+@api.post("/slack/events")
+async def slack_events(req: Request):
+    # Handle Slack URL verification explicitly
+    raw_body = await req.body()
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        payload = {}
+
+    if payload.get("type") == "url_verification":
+        return JSONResponse({"challenge": payload["challenge"]})
+
+    # All normal Slack requests go to Bolt
+    return await handler.handle(req)
+
+
+# -----------------------------
+# Scheduler
+# -----------------------------
+def scheduled_5pm_reset() -> None:
+    reset_for_5pm()
+    print("Parking reset completed at 5:00 PM local time")
+
+
+# -----------------------------
+# Startup
+# -----------------------------
+init_db()
+
+scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
+scheduler.add_job(scheduled_5pm_reset, "cron", hour=17, minute=0)
+scheduler.start()
