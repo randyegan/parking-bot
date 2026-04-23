@@ -387,7 +387,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
     else:
         status = spot.state
 
-    return f"*{spot.spot_id}*\\n{status}"
+    return f"*{spot.spot_id}*\n{status}"
 
 
 def parking_home_blocks(user_id: str) -> list:
