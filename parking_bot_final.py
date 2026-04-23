@@ -4,10 +4,10 @@ import os
 import json
 import sqlite3
 from contextlib import asynccontextmanager, closing
-from datetime import datetime
-from zoneinfo import ZoneInfo
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional, List
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
@@ -17,29 +17,34 @@ from slack_bolt.adapter.fastapi import SlackRequestHandler
 
 
 # -----------------------------
-# ENV
+# Environment
 # -----------------------------
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
-PARKING_CHANNEL_ID = os.getenv("PARKING_CHANNEL_ID", "")
-DATABASE_PATH = os.getenv("DATABASE_PATH", "/data/parking.db")
 PARKING_TIMEZONE = os.getenv("PARKING_TIMEZONE", "America/Vancouver")
-
-BOARD_TS_FILE = "/data/board_ts.txt"
+DATABASE_PATH = os.getenv("DATABASE_PATH", "/data/parking.db")
+PARKING_CHANNEL_ID = os.getenv("PARKING_CHANNEL_ID", "")
+BOARD_TS_FILE = os.getenv("BOARD_TS_FILE", "/data/board_ts.txt")
 
 if not SLACK_BOT_TOKEN or not SLACK_SIGNING_SECRET:
-    raise RuntimeError("Missing Slack credentials")
+    raise RuntimeError("SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET must be set")
 
 
 # -----------------------------
-# USERS / SPOTS
+# IDs and spot names
 # -----------------------------
 RANDY_ID = "U1HMCS77V"
 KYLIE_ID = "UR0JZ0GR0"
 MIKE_ID = "U03EH8HM4G0"
 PETER_ID = "U03DVSASKPE"
 
-M1, M2, P1, P2, P3, T1 = "M1", "M2", "P1", "P2", "P3", "T1"
+M1 = "M1"
+M2 = "M2"
+P1 = "P1"
+P2 = "P2"
+P3 = "P3"
+T1 = "T1"
+
 SPOT_ORDER = [M1, M2, P1, P2, P3, T1]
 
 DISPLAY_NAMES = {
@@ -54,11 +59,12 @@ MANAGEMENT_DEFAULTS = {
     KYLIE_ID: M2,
 }
 
-CINOVA_USERS = {MIKE_ID, PETER_ID}
+CINOVA_USER_IDS = {MIKE_ID, PETER_ID}
+CINOVA_GROUP_KEY = "cinova"
 
 
 # -----------------------------
-# SLACK
+# Slack app
 # -----------------------------
 slack_app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
 handler = SlackRequestHandler(slack_app)
@@ -66,235 +72,667 @@ scheduler: Optional[BackgroundScheduler] = None
 
 
 # -----------------------------
-# MODEL
+# Models
 # -----------------------------
 @dataclass
-class Spot:
+class SpotRecord:
     spot_id: str
     state: str
-    reserved_for: Optional[str]
-    held_for: Optional[str]
-    held_group: Optional[str]
-    updated_at: Optional[str]
+    reserved_for_user_id: Optional[str]
+    held_for_user_id: Optional[str]
+    held_for_group: Optional[str]
 
 
 # -----------------------------
-# DB
+# Helpers
 # -----------------------------
-def get_db():
+def local_now() -> datetime:
+    return datetime.now(ZoneInfo(PARKING_TIMEZONE))
+
+
+def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def now():
-    return datetime.now(ZoneInfo(PARKING_TIMEZONE)).isoformat()
-
-
-def init_db():
+def init_db() -> None:
     with closing(get_db()) as conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS spots (
-            spot_id TEXT PRIMARY KEY,
-            state TEXT,
-            reserved_for TEXT,
-            held_for TEXT,
-            held_group TEXT,
-            updated_at TEXT
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reservations (
+                spot_id TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                reserved_for_user_id TEXT,
+                held_for_user_id TEXT,
+                held_for_group TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
         )
-        """)
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_prefs (
+                slack_user_id TEXT PRIMARY KEY,
+                notifications_enabled INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+
+        now = local_now().isoformat()
 
         defaults = {
-            M1: ("held", None, RANDY_ID, None),
-            M2: ("held", None, KYLIE_ID, None),
+            M1: ("held_user", None, RANDY_ID, None),
+            M2: ("held_user", None, KYLIE_ID, None),
             P1: ("open", None, None, None),
             P2: ("open", None, None, None),
             P3: ("open", None, None, None),
-            T1: ("held_group", None, None, "cinova"),
+            T1: ("held_group", None, None, CINOVA_GROUP_KEY),
         }
 
-        for spot, vals in defaults.items():
-            exists = conn.execute("SELECT 1 FROM spots WHERE spot_id=?", (spot,)).fetchone()
-            if not exists:
-                conn.execute(
-                    "INSERT INTO spots VALUES (?, ?, ?, ?, ?, ?)",
-                    (spot, *vals, now())
+        for spot_id in SPOT_ORDER:
+            row = cur.execute(
+                "SELECT spot_id FROM reservations WHERE spot_id = ?",
+                (spot_id,),
+            ).fetchone()
+
+            if row is None:
+                state, reserved_for_user_id, held_for_user_id, held_for_group = defaults[spot_id]
+                cur.execute(
+                    """
+                    INSERT INTO reservations (
+                        spot_id, state, reserved_for_user_id,
+                        held_for_user_id, held_for_group, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        spot_id,
+                        state,
+                        reserved_for_user_id,
+                        held_for_user_id,
+                        held_for_group,
+                        now,
+                    ),
                 )
+
         conn.commit()
 
 
-def get_all():
+def set_spot_state(
+    spot_id: str,
+    state: str,
+    reserved_for_user_id: Optional[str] = None,
+    held_for_user_id: Optional[str] = None,
+    held_for_group: Optional[str] = None,
+) -> None:
     with closing(get_db()) as conn:
-        rows = conn.execute("SELECT * FROM spots").fetchall()
-        return [Spot(*r) for r in rows]
-
-
-def update_spot(spot, state, r=None, h=None, g=None):
-    with closing(get_db()) as conn:
-        conn.execute("""
-        UPDATE spots
-        SET state=?, reserved_for=?, held_for=?, held_group=?, updated_at=?
-        WHERE spot_id=?
-        """, (state, r, h, g, now(), spot))
+        conn.execute(
+            """
+            UPDATE reservations
+            SET state = ?,
+                reserved_for_user_id = ?,
+                held_for_user_id = ?,
+                held_for_group = ?,
+                updated_at = ?
+            WHERE spot_id = ?
+            """,
+            (
+                state,
+                reserved_for_user_id,
+                held_for_user_id,
+                held_for_group,
+                local_now().isoformat(),
+                spot_id,
+            ),
+        )
         conn.commit()
 
 
-def get_user_spot(uid):
+def get_spot(spot_id: str) -> SpotRecord:
     with closing(get_db()) as conn:
         row = conn.execute(
-            "SELECT spot_id FROM spots WHERE state='reserved' AND reserved_for=?",
-            (uid,)
+            """
+            SELECT spot_id, state, reserved_for_user_id, held_for_user_id, held_for_group
+            FROM reservations
+            WHERE spot_id = ?
+            """,
+            (spot_id,),
         ).fetchone()
-    return row[0] if row else None
+
+    return SpotRecord(
+        spot_id=row["spot_id"],
+        state=row["state"],
+        reserved_for_user_id=row["reserved_for_user_id"],
+        held_for_user_id=row["held_for_user_id"],
+        held_for_group=row["held_for_group"],
+    )
 
 
-# -----------------------------
-# BOARD STORAGE
-# -----------------------------
-def save_ts(ts):
+def get_all_spots() -> List[SpotRecord]:
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            """
+            SELECT spot_id, state, reserved_for_user_id, held_for_user_id, held_for_group
+            FROM reservations
+            ORDER BY CASE spot_id
+                WHEN 'M1' THEN 1
+                WHEN 'M2' THEN 2
+                WHEN 'P1' THEN 3
+                WHEN 'P2' THEN 4
+                WHEN 'P3' THEN 5
+                WHEN 'T1' THEN 6
+                ELSE 99
+            END
+            """
+        ).fetchall()
+
+    return [
+        SpotRecord(
+            spot_id=r["spot_id"],
+            state=r["state"],
+            reserved_for_user_id=r["reserved_for_user_id"],
+            held_for_user_id=r["held_for_user_id"],
+            held_for_group=r["held_for_group"],
+        )
+        for r in rows
+    ]
+
+
+def get_user_booked_spot(user_id: str) -> Optional[str]:
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT spot_id
+            FROM reservations
+            WHERE state = 'reserved' AND reserved_for_user_id = ?
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+
+    return row["spot_id"] if row else None
+
+
+def notifications_enabled(user_id: str) -> bool:
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT notifications_enabled
+            FROM user_prefs
+            WHERE slack_user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+    if row is None:
+        return True
+    return bool(row["notifications_enabled"])
+
+
+def toggle_notifications_for_user(user_id: str) -> bool:
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT notifications_enabled
+            FROM user_prefs
+            WHERE slack_user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+        if row is None:
+            new_value = 0
+            conn.execute(
+                """
+                INSERT INTO user_prefs (slack_user_id, notifications_enabled)
+                VALUES (?, ?)
+                """,
+                (user_id, new_value),
+            )
+        else:
+            new_value = 0 if row["notifications_enabled"] else 1
+            conn.execute(
+                """
+                UPDATE user_prefs
+                SET notifications_enabled = ?
+                WHERE slack_user_id = ?
+                """,
+                (new_value, user_id),
+            )
+
+        conn.commit()
+
+    return bool(new_value)
+
+
+def maybe_dm(user_id: str, text: str) -> None:
+    if not notifications_enabled(user_id):
+        return
+
     try:
-        with open(BOARD_TS_FILE, "w") as f:
-            f.write(ts)
-    except:
+        slack_app.client.chat_postMessage(channel=user_id, text=text)
+    except Exception:
         pass
 
 
-def load_ts():
+# -----------------------------
+# Live board message
+# -----------------------------
+def save_board_ts(ts: str) -> None:
     try:
-        return open(BOARD_TS_FILE).read().strip()
-    except:
+        with open(BOARD_TS_FILE, "w") as f:
+            f.write(ts)
+    except Exception as e:
+        print(f"Could not save board ts: {e}", flush=True)
+
+
+def load_board_ts() -> Optional[str]:
+    try:
+        with open(BOARD_TS_FILE, "r") as f:
+            return f.read().strip()
+    except Exception:
         return None
 
 
-# -----------------------------
-# BOARD VIEW
-# -----------------------------
-def board_text():
+def board_line_for_spot(spot: SpotRecord) -> str:
+    if spot.state == "open":
+        status = "🟢 Open"
+    elif spot.state == "held_user":
+        name = DISPLAY_NAMES.get(spot.held_for_user_id, f"<@{spot.held_for_user_id}>")
+        status = f"🟡 Held for {name}"
+    elif spot.state == "held_group":
+        status = "🟡 Held for Cinova users"
+    elif spot.state == "reserved":
+        name = DISPLAY_NAMES.get(spot.reserved_for_user_id, f"<@{spot.reserved_for_user_id}>")
+        status = f"🔴 Booked by {name}"
+    else:
+        status = spot.state
+
+    return f"{spot.spot_id} - {status}"
+
+
+def build_board_text() -> str:
     lines = ["🚗 *Office Parking Board*\n"]
+    for spot in get_all_spots():
+        lines.append(board_line_for_spot(spot))
 
-    for s in get_all():
-        if s.state == "open":
-            status = "🟢 Open"
-        elif s.state == "held":
-            name = DISPLAY_NAMES.get(s.held_for, f"<@{s.held_for}>")
-            status = f"🟡 Held for {name}"
-        elif s.state == "held_group":
-            status = "🟡 Held for Cinova users"
-        else:
-            name = DISPLAY_NAMES.get(s.reserved_for, f"<@{s.reserved_for}>")
-            status = f"🔴 Booked by {name}"
-
-        lines.append(f"{s.spot_id} - {status}")
-
-    lines.append(f"\n_Last updated: {datetime.now(ZoneInfo(PARKING_TIMEZONE)).strftime('%-I:%M %p')}_")
+    lines.append(f"\n_Last updated: {local_now().strftime('%-I:%M %p')}_")
     return "\n".join(lines)
 
 
-def update_board():
+def update_parking_board() -> None:
     if not PARKING_CHANNEL_ID:
+        print("PARKING_CHANNEL_ID is not set. Board not posted.", flush=True)
         return
 
-    text = board_text()
-    ts = load_ts()
+    text = build_board_text()
+    ts = load_board_ts()
 
     try:
         if ts:
             slack_app.client.chat_update(
                 channel=PARKING_CHANNEL_ID,
                 ts=ts,
-                text=text
+                text=text,
             )
         else:
             resp = slack_app.client.chat_postMessage(
                 channel=PARKING_CHANNEL_ID,
-                text=text
+                text=text,
             )
-            save_ts(resp["ts"])
+            save_board_ts(resp["ts"])
+        print("Parking board updated", flush=True)
     except Exception as e:
-        print("Board update failed:", e)
+        print(f"Board update failed: {e}", flush=True)
 
 
 # -----------------------------
-# LOGIC
+# Home tab
 # -----------------------------
-def reserve(uid):
-    if get_user_spot(uid):
-        return
+def display_line_for_spot(spot: SpotRecord) -> str:
+    if spot.state == "open":
+        status = "Open"
+    elif spot.state == "held_user":
+        if spot.held_for_user_id == RANDY_ID:
+            status = "Held for @Randy"
+        elif spot.held_for_user_id == KYLIE_ID:
+            status = "Held for @Kylie"
+        else:
+            status = f"Held for <@{spot.held_for_user_id}>"
+    elif spot.state == "held_group":
+        if spot.held_for_group == CINOVA_GROUP_KEY:
+            status = "Held for Cinova users"
+        else:
+            status = "Held"
+    elif spot.state == "reserved":
+        if spot.reserved_for_user_id in DISPLAY_NAMES:
+            status = f"Booked by {DISPLAY_NAMES[spot.reserved_for_user_id]}"
+        else:
+            status = f"Booked by <@{spot.reserved_for_user_id}>"
+    else:
+        status = spot.state
 
-    if uid in MANAGEMENT_DEFAULTS:
-        s = next(x for x in get_all() if x.spot_id == MANAGEMENT_DEFAULTS[uid])
-        if s.state == "held":
-            update_spot(s.spot_id, "reserved", uid)
-            return
-
-    if uid in CINOVA_USERS:
-        s = next(x for x in get_all() if x.spot_id == T1)
-        if s.state == "held_group":
-            update_spot(T1, "reserved", uid)
-            return
-
-    for s in get_all():
-        if s.state == "open":
-            update_spot(s.spot_id, "reserved", uid)
-            return
-
-
-def release(uid):
-    spot = get_user_spot(uid)
-    if not spot:
-        return
-
-    update_spot(spot, "open")
+    return f"{spot.spot_id} - {status}"
 
 
-def reset():
-    update_spot(M1, "held", None, RANDY_ID)
-    update_spot(M2, "held", None, KYLIE_ID)
-    update_spot(P1, "open")
-    update_spot(P2, "open")
-    update_spot(P3, "open")
-    update_spot(T1, "held_group", None, None, "cinova")
+def has_any_available_spot_for_user(user_id: str) -> bool:
+    if user_id in MANAGEMENT_DEFAULTS:
+        management_spot = MANAGEMENT_DEFAULTS[user_id]
+        spot = get_spot(management_spot)
+        if spot.state == "held_user" and spot.held_for_user_id == user_id:
+            return True
+
+    if user_id in CINOVA_USER_IDS:
+        t1 = get_spot(T1)
+        if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
+            return True
+
+    for spot_id in SPOT_ORDER:
+        spot = get_spot(spot_id)
+        if spot.state == "open":
+            return True
+
+    return False
+
+
+def parking_home_blocks(user_id: str) -> list:
+    booked_spot = get_user_booked_spot(user_id)
+
+    if booked_spot:
+        booking_text = f"You have Spot {booked_spot} today."
+    elif has_any_available_spot_for_user(user_id):
+        booking_text = "You do not have a booking today."
+    else:
+        booking_text = "Sorry, all spots are reserved for today."
+
+    refreshed = local_now().strftime("%-I:%M:%S %p")
+    notif_text = "Notifications: On" if notifications_enabled(user_id) else "Notifications: Off"
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "Office Parking", "emoji": True},
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": booking_text},
+        },
+        {
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": notif_text},
+                {"type": "mrkdwn", "text": f"Last refreshed: {refreshed}"},
+            ],
+        },
+        {"type": "divider"},
+    ]
+
+    for spot in get_all_spots():
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": display_line_for_spot(spot)},
+            }
+        )
+
+    blocks.extend(
+        [
+            {"type": "divider"},
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Reserve"},
+                        "action_id": "reserve_today",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Release"},
+                        "action_id": "release_today",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Refresh"},
+                        "action_id": "refresh_home",
+                    },
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Turn off notifications" if notifications_enabled(user_id) else "Turn on notifications",
+                        },
+                        "action_id": "toggle_notifications",
+                    },
+                ],
+            },
+        ]
+    )
+
+    return blocks
+
+
+def publish_home(user_id: str) -> None:
+    slack_app.client.views_publish(
+        user_id=user_id,
+        view={"type": "home", "blocks": parking_home_blocks(user_id)},
+    )
+
+
+def all_known_user_ids() -> List[str]:
+    users = {RANDY_ID, KYLIE_ID, MIKE_ID, PETER_ID}
+
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT reserved_for_user_id
+            FROM reservations
+            WHERE reserved_for_user_id IS NOT NULL
+            """
+        ).fetchall()
+        for r in rows:
+            if r["reserved_for_user_id"]:
+                users.add(r["reserved_for_user_id"])
+
+        rows = conn.execute("SELECT slack_user_id FROM user_prefs").fetchall()
+        for r in rows:
+            if r["slack_user_id"]:
+                users.add(r["slack_user_id"])
+
+    return list(users)
+
+
+def publish_home_all_users() -> None:
+    for user_id in all_known_user_ids():
+        try:
+            publish_home(user_id)
+        except Exception:
+            pass
 
 
 # -----------------------------
-# SLACK ACTIONS
+# Parking logic
 # -----------------------------
-@slack_app.action("reserve_today")
-def reserve_action(ack, body):
+def reserve_for_user(user_id: str) -> str:
+    existing = get_user_booked_spot(user_id)
+    if existing:
+        return f"You have Spot {existing} today."
+
+    if user_id in MANAGEMENT_DEFAULTS:
+        management_spot = MANAGEMENT_DEFAULTS[user_id]
+        spot = get_spot(management_spot)
+        if spot.state == "held_user" and spot.held_for_user_id == user_id:
+            set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
+            return f"You have Spot {management_spot} today."
+
+    if user_id in CINOVA_USER_IDS:
+        t1 = get_spot(T1)
+        if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
+            set_spot_state(T1, "reserved", reserved_for_user_id=user_id)
+            return f"You have Spot {T1} today."
+
+    for spot_id in SPOT_ORDER:
+        spot = get_spot(spot_id)
+        if spot.state == "open":
+            set_spot_state(spot_id, "reserved", reserved_for_user_id=user_id)
+            return f"You have Spot {spot_id} today."
+
+    return "Sorry, all spots are reserved for today."
+
+
+def release_for_user(user_id: str) -> str:
+    booked_spot = get_user_booked_spot(user_id)
+    if not booked_spot:
+        return "You do not have a booking to release."
+
+    set_spot_state(booked_spot, "open")
+    return f"Spot {booked_spot} is now open."
+
+
+def reset_for_5pm() -> None:
+    set_spot_state(M1, "held_user", held_for_user_id=RANDY_ID)
+    set_spot_state(M2, "held_user", held_for_user_id=KYLIE_ID)
+    set_spot_state(P1, "open")
+    set_spot_state(P2, "open")
+    set_spot_state(P3, "open")
+    set_spot_state(T1, "held_group", held_for_group=CINOVA_GROUP_KEY)
+
+
+# -----------------------------
+# Slack handlers
+# -----------------------------
+@slack_app.event("app_home_opened")
+def on_app_home_opened(event, logger):
+    publish_home(event["user"])
+    logger.info("Published App Home for %s", event["user"])
+
+
+@slack_app.command("/parking")
+def parking_command(ack, body):
     ack()
-    reserve(body["user"]["id"])
-    update_board()
+    publish_home(body["user_id"])
+    update_parking_board()
+
+
+@slack_app.action("reserve_today")
+def reserve_today_action(ack, body):
+    ack()
+    user_id = body["user"]["id"]
+    message = reserve_for_user(user_id)
+    publish_home_all_users()
+    update_parking_board()
+    maybe_dm(user_id, f":parking: {message}")
 
 
 @slack_app.action("release_today")
-def release_action(ack, body):
+def release_today_action(ack, body):
     ack()
-    release(body["user"]["id"])
-    update_board()
+    user_id = body["user"]["id"]
+    message = release_for_user(user_id)
+    publish_home_all_users()
+    update_parking_board()
+    maybe_dm(user_id, f":parking: {message}")
+
+
+@slack_app.action("refresh_home")
+def refresh_home_action(ack, body):
+    ack()
+    user_id = body["user"]["id"]
+    publish_home(user_id)
+    update_parking_board()
+
+
+@slack_app.action("toggle_notifications")
+def toggle_notifications_action(ack, body):
+    ack()
+    user_id = body["user"]["id"]
+    now_enabled = toggle_notifications_for_user(user_id)
+    publish_home(user_id)
+
+    try:
+        slack_app.client.chat_postMessage(
+            channel=user_id,
+            text="Notifications turned on." if now_enabled else "Notifications turned off.",
+        )
+    except Exception:
+        pass
 
 
 # -----------------------------
-# FASTAPI
+# Scheduler
+# -----------------------------
+def scheduled_5pm_reset() -> None:
+    reset_for_5pm()
+    publish_home_all_users()
+    update_parking_board()
+    print("Parking reset completed at 5:00 PM local time", flush=True)
+
+
+# -----------------------------
+# App lifecycle
 # -----------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
     global scheduler
+
+    db_dir = os.path.dirname(DATABASE_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    init_db()
+    update_parking_board()
+
     scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
-    scheduler.add_job(reset, "cron", hour=17)
+    scheduler.add_job(scheduled_5pm_reset, "cron", hour=17, minute=0)
     scheduler.start()
+    print("Scheduler started", flush=True)
+
     yield
-    scheduler.shutdown()
+
+    if scheduler:
+        scheduler.shutdown()
+    print("Scheduler stopped", flush=True)
 
 
-api = FastAPI(lifespan=lifespan)
+api = FastAPI(title="Parking Bot", lifespan=lifespan)
+
+
+# -----------------------------
+# Routes
+# -----------------------------
+@api.get("/")
+def root():
+    return {"status": "Parking bot is running"}
+
+
+@api.get("/health")
+def health():
+    return {"ok": True, "time": local_now().isoformat()}
 
 
 @api.post("/slack/events")
-async def events(req: Request):
+async def slack_events(req: Request):
+    body = await req.body()
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception:
+        return PlainTextResponse("Invalid request", status_code=400)
+
+    if payload.get("type") == "url_verification":
+        return PlainTextResponse(payload["challenge"], status_code=200)
+
     return await handler.handle(req)
 
 
 @api.post("/slack/interactivity")
-async def interactivity(req: Request):
+async def slack_interactivity(req: Request):
+    return await handler.handle(req)
+
+
+@api.post("/slack/commands")
+async def slack_commands(req: Request):
     return await handler.handle(req)
