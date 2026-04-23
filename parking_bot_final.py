@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import json
 import sqlite3
-from contextlib import closing
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List
@@ -66,7 +66,26 @@ CINOVA_USER_IDS = {MIKE_ID, PETER_ID}
 # -----------------------------
 slack_app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
 handler = SlackRequestHandler(slack_app)
-api = FastAPI(title="Parking Bot")
+
+scheduler = None  # Defined at module level; started in lifespan
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    global scheduler
+    scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
+    scheduler.add_job(scheduled_5pm_reset, "cron", hour=17, minute=0)
+    scheduler.start()
+    print("Scheduler started")
+    yield
+    # Shutdown
+    if scheduler:
+        scheduler.shutdown()
+    print("Scheduler stopped")
+
+
+api = FastAPI(title="Parking Bot", lifespan=lifespan)
 
 
 # -----------------------------
@@ -578,7 +597,3 @@ try:
     init_db()
 except Exception as e:
     print(f"Error initializing database: {e}", flush=True)
-
-scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
-scheduler.add_job(scheduled_5pm_reset, "cron", hour=17, minute=0)
-scheduler.start()
