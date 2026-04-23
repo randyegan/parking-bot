@@ -443,15 +443,15 @@ def display_line_for_spot(spot: SpotRecord) -> str:
 
     return f"{spot.spot_id} - {status}"
 
-
 def parking_home_blocks(user_id: str) -> list:
-   booked_spot = get_user_booked_spot(user_id)
-if booked_spot:
-    booking_text = f"You have Spot {booked_spot} today."
-elif has_any_available_spot_for_user(user_id):
-    booking_text = "You do not have a booking today."
-else:
-    booking_text = "Sorry, all spots are reserved for today."
+    booked_spot = get_user_booked_spot(user_id)
+
+    if booked_spot:
+        booking_text = f"You have Spot {booked_spot} today."
+    elif has_any_available_spot_for_user(user_id):
+        booking_text = "You do not have a booking today."
+    else:
+        booking_text = "Sorry, all spots are reserved for today."
 
     refreshed = local_now().strftime("%-I:%M:%S %p")
     notif_text = "Notifications: On" if notifications_enabled(user_id) else "Notifications: Off"
@@ -518,6 +518,7 @@ else:
     )
 
     return blocks
+
 
 def has_any_available_spot_for_user(user_id: str) -> bool:
     # Management users can claim their own held spot
