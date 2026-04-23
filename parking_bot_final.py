@@ -62,7 +62,7 @@ CINOVA_GROUP_KEY = "cinova"
 
 
 # -----------------------------
-# Slack / FastAPI
+# Slack app
 # -----------------------------
 slack_app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
 handler = SlackRequestHandler(slack_app)
@@ -267,7 +267,6 @@ def notifications_enabled(user_id: str) -> bool:
 
     if row is None:
         return True
-
     return bool(row["notifications_enabled"])
 
 
@@ -388,7 +387,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
     else:
         status = spot.state
 
-    return f"*{spot.spot_id}*\n{status}"
+    return f"*{spot.spot_id}*\\n{status}"
 
 
 def parking_home_blocks(user_id: str) -> list:
@@ -477,9 +476,8 @@ def publish_home(user_id: str) -> None:
 # -----------------------------
 @slack_app.event("app_home_opened")
 def on_app_home_opened(event, logger):
-    user_id = event["user"]
-    publish_home(user_id)
-    logger.info("Published App Home for %s", user_id)
+    publish_home(event["user"])
+    logger.info("Published App Home for %s", event["user"])
 
 
 @slack_app.command("/parking")
@@ -526,6 +524,34 @@ def toggle_notifications_action(ack, body):
         )
     except Exception:
         pass
+
+
+# -----------------------------
+# App lifecycle
+# -----------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global scheduler
+
+    db_dir = os.path.dirname(DATABASE_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    init_db()
+
+    scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
+    scheduler.add_job(scheduled_5pm_reset, "cron", hour=17, minute=0)
+    scheduler.start()
+    print("Scheduler started", flush=True)
+
+    yield
+
+    if scheduler:
+        scheduler.shutdown()
+    print("Scheduler stopped", flush=True)
+
+
+api = FastAPI(title="Parking Bot", lifespan=lifespan)
 
 
 # -----------------------------
