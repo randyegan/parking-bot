@@ -47,6 +47,15 @@ T1 = "T1"
 
 SPOT_ORDER = [M1, M2, P1, P2, P3, T1]
 
+DISPLAY_SPOT_NAMES = {
+    "M1": "M1-#00",
+    "M2": "M2-#00",
+    "P1": "P1-#00",
+    "P2": "P2-#00",
+    "P3": "P3-#00",
+    "T1": "T1-#00",
+}
+
 DISPLAY_NAMES = {
     RANDY_ID: "@Randy",
     KYLIE_ID: "@Kylie",
@@ -352,7 +361,8 @@ def board_line_for_spot(spot: SpotRecord) -> str:
     else:
         status = spot.state
 
-    return f"{spot.spot_id} - {status}"
+    label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
+return f"{label} - {status}"
 
 
 def build_board_text() -> str:
@@ -420,7 +430,8 @@ def display_line_for_spot(spot: SpotRecord) -> str:
     else:
         status = spot.state
 
-    return f"{spot.spot_id} - {status}"
+    label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
+return f"{label} - {status}"
 
 
 def has_any_available_spot_for_user(user_id: str) -> bool:
