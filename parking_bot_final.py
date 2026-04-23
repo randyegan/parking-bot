@@ -580,9 +580,11 @@ def release_today_action(ack, body):
     ack()
     user_id = body["user"]["id"]
     message = release_for_user(user_id)
+
     publish_home_all_users()
     maybe_dm(user_id, f":parking: {message}")
 
+    # Only post successful releases
     if message.startswith("Spot "):
         who = DISPLAY_NAMES.get(user_id, f"<@{user_id}>")
         post_channel_update(f"{who} released {message.replace(' is now open.', '')}.")
@@ -608,7 +610,20 @@ def toggle_notifications_action(ack, body):
     except Exception:
         pass
 
+@slack_app.action("reserve_today")
+def reserve_today_action(ack, body):
+    ack()
+    user_id = body["user"]["id"]
+    message = reserve_for_user(user_id)
 
+    publish_home_all_users()
+    maybe_dm(user_id, f":parking: {message}")
+
+    if message.startswith("You have Spot "):
+        spot = message.replace("You have ", "").replace(" today.", "")
+        who = DISPLAY_NAMES.get(user_id, f"<@{user_id}>")
+        post_channel_update(f"{who} reserved {spot}.")
+        
 # -----------------------------
 # App lifecycle
 # -----------------------------
