@@ -75,6 +75,7 @@ class Spot:
     reserved_for: Optional[str]
     held_for: Optional[str]
     held_group: Optional[str]
+    updated_at: Optional[str]
 
 
 # -----------------------------
