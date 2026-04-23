@@ -575,7 +575,8 @@ def publish_home_all_users() -> None:
 def reserve_for_user(user_id: str) -> str:
     existing = get_user_booked_spot(user_id)
     if existing:
-        return f"You have Spot {existing} today."
+       label = DISPLAY_SPOT_NAMES.get(existing, existing)
+return f"You have Spot {label} today."
 
     if user_id in MANAGEMENT_DEFAULTS:
         management_spot = MANAGEMENT_DEFAULTS[user_id]
@@ -608,7 +609,8 @@ def release_for_user(user_id: str) -> str:
         return "You do not have a booking to release."
 
     set_spot_state(booked_spot, "open")
-    return f"Spot {booked_spot} is now open."
+   label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
+return f"Spot {label} is now open."
 
 
 def reset_for_5pm() -> None:
