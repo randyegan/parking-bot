@@ -582,19 +582,22 @@ def reserve_for_user(user_id: str) -> str:
         spot = get_spot(management_spot)
         if spot.state == "held_user" and spot.held_for_user_id == user_id:
             set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
-            return f"You have Spot {management_spot} today."
+            label = DISPLAY_SPOT_NAMES.get(management_spot, management_spot)
+return f"You have Spot {label} today."
 
     if user_id in CINOVA_USER_IDS:
         t1 = get_spot(T1)
         if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
             set_spot_state(T1, "reserved", reserved_for_user_id=user_id)
-            return f"You have Spot {T1} today."
+         label = DISPLAY_SPOT_NAMES.get(T1, T1)
+return f"You have Spot {label} today."
 
     for spot_id in SPOT_ORDER:
         spot = get_spot(spot_id)
         if spot.state == "open":
             set_spot_state(spot_id, "reserved", reserved_for_user_id=user_id)
-            return f"You have Spot {spot_id} today."
+          label = DISPLAY_SPOT_NAMES.get(T1, T1)
+return f"You have Spot {label} today."
 
     return "Sorry, all spots are reserved for today."
 
