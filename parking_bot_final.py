@@ -560,18 +560,19 @@ def parking_command(ack, body):
     publish_home(body["user_id"])
 
 
-@slack_app.action("reserve_today")
-def reserve_today_action(ack, body):
+@slack_app.action("release_today")
+def release_today_action(ack, body):
     ack()
     user_id = body["user"]["id"]
-    message = reserve_for_user(user_id)
+    message = release_for_user(user_id)
+
     publish_home_all_users()
     maybe_dm(user_id, f":parking: {message}")
 
-    if message.startswith("You have Spot "):
-        spot_text = message.replace("You have ", "").replace(" today.", "")
+    # Only post successful releases
+    if message.startswith("Spot "):
         who = DISPLAY_NAMES.get(user_id, f"<@{user_id}>")
-        post_channel_update(f"{spot_text} reserved by {who}")
+        post_channel_update(f"{who} released {message.replace(' is now open.', '')}.")
 
 
 @slack_app.action("release_today")
