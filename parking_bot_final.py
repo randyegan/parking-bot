@@ -4,10 +4,10 @@ import os
 import json
 import sqlite3
 from contextlib import asynccontextmanager, closing
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List
 from zoneinfo import ZoneInfo
+from dataclasses import dataclass
+from typing import Optional, List
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
@@ -23,6 +23,7 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
 PARKING_TIMEZONE = os.getenv("PARKING_TIMEZONE", "America/Vancouver")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "/data/parking.db")
+PARKING_CHANNEL_ID = os.getenv("PARKING_CHANNEL_ID", "")
 
 if not SLACK_BOT_TOKEN or not SLACK_SIGNING_SECRET:
     raise RuntimeError("SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET must be set")
@@ -314,25 +315,60 @@ def maybe_dm(user_id: str, text: str) -> None:
         slack_app.client.chat_postMessage(channel=user_id, text=text)
     except Exception:
         pass
-        
-def publish_home_all_users() -> None:
-    users = set([RANDY_ID, KYLIE_ID, MIKE_ID, PETER_ID])
+
+
+def post_channel_update(text: str) -> None:
+    if not PARKING_CHANNEL_ID:
+        return
+
+    try:
+        slack_app.client.chat_postMessage(channel=PARKING_CHANNEL_ID, text=f":parking: {text}")
+    except Exception:
+        pass
+
+
+def publish_home(user_id: str) -> None:
+    slack_app.client.views_publish(
+        user_id=user_id,
+        view={"type": "home", "blocks": parking_home_blocks(user_id)},
+    )
+
+
+def all_known_user_ids() -> List[str]:
+    users = {RANDY_ID, KYLIE_ID, MIKE_ID, PETER_ID}
 
     with closing(get_db()) as conn:
-        rows = conn.execute("""
-            SELECT DISTINCT reserved_for_user_id FROM reservations
+        rows = conn.execute(
+            """
+            SELECT DISTINCT reserved_for_user_id
+            FROM reservations
             WHERE reserved_for_user_id IS NOT NULL
-        """).fetchall()
-
+            """
+        ).fetchall()
         for r in rows:
             if r["reserved_for_user_id"]:
                 users.add(r["reserved_for_user_id"])
 
-    for u in users:
+        rows = conn.execute(
+            """
+            SELECT slack_user_id
+            FROM user_prefs
+            """
+        ).fetchall()
+        for r in rows:
+            if r["slack_user_id"]:
+                users.add(r["slack_user_id"])
+
+    return list(users)
+
+
+def publish_home_all_users() -> None:
+    for u in all_known_user_ids():
         try:
             publish_home(u)
         except Exception:
             pass
+
 
 # -----------------------------
 # Parking logic
@@ -361,13 +397,13 @@ def reserve_for_user(user_id: str) -> str:
             set_spot_state(spot_id, "reserved", reserved_for_user_id=user_id)
             return f"You have Spot {spot_id} today."
 
-    return "No spots are available right now."
+    return "Sorry, all spots are reserved for today."
 
 
-def Release_for_user(user_id: str) -> str:
+def release_for_user(user_id: str) -> str:
     booked_spot = get_user_booked_spot(user_id)
     if not booked_spot:
-        return "You do not have a booking to Release."
+        return "You do not have a booking to release."
 
     set_spot_state(booked_spot, "open")
     return f"Spot {booked_spot} is now open."
@@ -405,7 +441,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
     else:
         status = spot.state
 
-    return f"{spot.spot_id} — {status}"
+    return f"{spot.spot_id} - {status}"
 
 
 def parking_home_blocks(user_id: str) -> list:
@@ -459,7 +495,7 @@ def parking_home_blocks(user_id: str) -> list:
                     {
                         "type": "button",
                         "text": {"type": "plain_text", "text": "Release"},
-                        "action_id": "Release_today",
+                        "action_id": "release_today",
                     },
                     {
                         "type": "button",
@@ -482,13 +518,6 @@ def parking_home_blocks(user_id: str) -> list:
     return blocks
 
 
-def publish_home(user_id: str) -> None:
-    slack_app.client.views_publish(
-        user_id=user_id,
-        view={"type": "home", "blocks": parking_home_blocks(user_id)},
-    )
-
-
 # -----------------------------
 # Slack handlers
 # -----------------------------
@@ -509,21 +538,23 @@ def reserve_today_action(ack, body):
     ack()
     user_id = body["user"]["id"]
     message = reserve_for_user(user_id)
-
-    publish_home_all_users()   # ← changed
-
+    publish_home_all_users()
     maybe_dm(user_id, f":parking: {message}")
 
+    if message.startswith("You have Spot "):
+        spot_text = message.replace("You have ", "").replace(" today.", "")
+        who = DISPLAY_NAMES.get(user_id, f"<@{user_id}>")
+        post_channel_update(f"{spot_text} reserved by {who}")
 
-@slack_app.action("Release_today")
-def Release_today_action(ack, body):
+
+@slack_app.action("release_today")
+def release_today_action(ack, body):
     ack()
     user_id = body["user"]["id"]
-    message = Release_for_user(user_id)
-
-    publish_home_all_users()   # ← changed
-
+    message = release_for_user(user_id)
+    publish_home_all_users()
     maybe_dm(user_id, f":parking: {message}")
+    post_channel_update(message)
 
 
 @slack_app.action("refresh_home")
@@ -619,4 +650,6 @@ async def slack_commands(req: Request):
 # -----------------------------
 def scheduled_5pm_reset() -> None:
     reset_for_5pm()
+    publish_home_all_users()
+    post_channel_update("All parking spots reset for tomorrow.")
     print("Parking reset completed at 5:00 PM local time", flush=True)
