@@ -10,7 +10,7 @@ from typing import Optional, List
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import PlainTextResponse
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from apscheduler.schedulers.background import BackgroundScheduler
