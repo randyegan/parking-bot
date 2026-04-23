@@ -458,7 +458,8 @@ def parking_home_blocks(user_id: str) -> list:
     booked_spot = get_user_booked_spot(user_id)
 
     if booked_spot:
-        booking_text = f"You have Spot {booked_spot} today."
+        label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
+        booking_text = f"You have Spot {label} today."
     elif has_any_available_spot_for_user(user_id):
         booking_text = "You do not have a booking today."
     else:
