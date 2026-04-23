@@ -362,7 +362,7 @@ def board_line_for_spot(spot: SpotRecord) -> str:
         status = spot.state
 
     label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
-return f"{label} - {status}"
+    return f"{label} - {status}"
 
 
 def build_board_text() -> str:
@@ -431,7 +431,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
         status = spot.state
 
     label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
-return f"{label} - {status}"
+    return f"{label} - {status}"
 
 
 def has_any_available_spot_for_user(user_id: str) -> bool:
