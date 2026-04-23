@@ -562,23 +562,18 @@ def health():
 
 
 from fastapi.responses import PlainTextResponse
+import json
 
 @api.post("/slack/events")
 async def slack_events(req: Request):
     body = await req.body()
 
-    # Try JSON first (for Slack verification + events)
-    try:
+    # 🔥 Only handle Slack verification manually
+    if b'"type":"url_verification"' in body:
         payload = json.loads(body.decode("utf-8"))
+        return PlainTextResponse(payload["challenge"], status_code=200)
 
-        if payload.get("type") == "url_verification":
-            return PlainTextResponse(payload["challenge"], status_code=200)
-
-    except Exception:
-        # Not JSON → it's a Slack interactive payload (buttons)
-        pass
-
-    # Let Slack Bolt handle EVERYTHING else (buttons, commands, etc)
+    # ✅ EVERYTHING else goes to Slack Bolt
     return await handler.handle(req)
 
 
