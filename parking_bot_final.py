@@ -567,16 +567,18 @@ from fastapi.responses import PlainTextResponse
 async def slack_events(req: Request):
     body = await req.body()
 
+    # Try JSON first (for Slack verification + events)
     try:
         payload = json.loads(body.decode("utf-8"))
+
+        if payload.get("type") == "url_verification":
+            return PlainTextResponse(payload["challenge"], status_code=200)
+
     except Exception:
-        return PlainTextResponse("Bad request", status_code=400)
+        # Not JSON → it's a Slack interactive payload (buttons)
+        pass
 
-    # 🔥 CRITICAL: handle Slack verification BEFORE Bolt
-    if payload.get("type") == "url_verification":
-        return PlainTextResponse(payload["challenge"], status_code=200)
-
-    # Everything else goes to Slack Bolt
+    # Let Slack Bolt handle EVERYTHING else (buttons, commands, etc)
     return await handler.handle(req)
 
 
