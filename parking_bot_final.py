@@ -346,10 +346,10 @@ def reserve_for_user(user_id: str) -> str:
     return "No spots are available right now."
 
 
-def cancel_for_user(user_id: str) -> str:
+def Release_for_user(user_id: str) -> str:
     booked_spot = get_user_booked_spot(user_id)
     if not booked_spot:
-        return "You do not have a booking to cancel."
+        return "You do not have a booking to Release."
 
     set_spot_state(booked_spot, "open")
     return f"Spot {booked_spot} is now open."
@@ -440,8 +440,8 @@ def parking_home_blocks(user_id: str) -> list:
                     },
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": "Cancel"},
-                        "action_id": "cancel_today",
+                        "text": {"type": "plain_text", "text": "Release"},
+                        "action_id": "Release_today",
                     },
                     {
                         "type": "button",
@@ -495,11 +495,11 @@ def reserve_today_action(ack, body):
     maybe_dm(user_id, f":parking: {message}")
 
 
-@slack_app.action("cancel_today")
-def cancel_today_action(ack, body):
+@slack_app.action("Release_today")
+def Release_today_action(ack, body):
     ack()
     user_id = body["user"]["id"]
-    message = cancel_for_user(user_id)
+    message = Release_for_user(user_id)
     publish_home(user_id)
     maybe_dm(user_id, f":parking: {message}")
 
