@@ -581,8 +581,9 @@ def release_today_action(ack, body):
     message = release_for_user(user_id)
     publish_home_all_users()
     maybe_dm(user_id, f":parking: {message}")
-    post_channel_update(message)
 
+    who = DISPLAY_NAMES.get(user_id, f"<@{user_id}>")
+    post_channel_update(f"{who}: {message}")
 
 @slack_app.action("refresh_home")
 def refresh_home_action(ack, body):
