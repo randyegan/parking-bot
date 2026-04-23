@@ -1,73 +1,41 @@
-
-"""
-Parking Bot - final single-file version
-
-Features:
-- Slack App Home UI
-- Spots: M1, M2, P1, P2, P3, T1
-- Default held spots:
-    M1 -> Randy (U1HMCS77V)
-    M2 -> Kylie (UR0JZ0GR0)
-    T1 -> Cinova users (Mike U03EH8HM4G0, Peter U03DVSASKPE)
-- Buttons: Reserve, Cancel, Refresh, Toggle notifications
-- Manual release only for M1/M2/T1 via Cancel
-- Daily 5:00 PM reset:
-    P1/P2/P3 -> Open
-    M1 -> Held for Randy
-    M2 -> Held for Kylie
-    T1 -> Held for Cinova users
-- No use of respond() in App Home actions
-"""
-
-    
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from typing import Optional, List
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-
-api = FastAPI()
-
-@api.post("/slack/events")
-async def slack_events(req: Request):
-    payload = await req.json()
-
-    # Slack URL verification
-    if payload.get("type") == "url_verification":
-        return JSONResponse({"challenge": payload["challenge"]})
-
-    return await handler.handle(req)
 
 # -----------------------------
-# Environment / config
+# Environment
 # -----------------------------
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
 PARKING_TIMEZONE = os.getenv("PARKING_TIMEZONE", "America/Vancouver")
-DATABASE_PATH = os.getenv("DATABASE_PATH", "parking.db")
+DATABASE_PATH = os.getenv("DATABASE_PATH", "/data/parking.db")
 
 if not SLACK_BOT_TOKEN or not SLACK_SIGNING_SECRET:
     raise RuntimeError("SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET must be set")
 
-# User IDs
+
+# -----------------------------
+# IDs and spot names
+# -----------------------------
 RANDY_ID = "U1HMCS77V"
 KYLIE_ID = "UR0JZ0GR0"
 MIKE_ID = "U03EH8HM4G0"
 PETER_ID = "U03DVSASKPE"
 
-# Spot constants
 M1 = "M1"
 M2 = "M2"
 P1 = "P1"
@@ -94,26 +62,16 @@ CINOVA_USER_IDS = {MIKE_ID, PETER_ID}
 
 
 # -----------------------------
-# Slack app / web app
+# Slack / FastAPI
 # -----------------------------
 slack_app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
 handler = SlackRequestHandler(slack_app)
-api = FastAPI(title="Parking Bot Final")
+api = FastAPI(title="Parking Bot")
 
 
 # -----------------------------
-# Data model notes
+# Models
 # -----------------------------
-# reservations table holds one row per spot
-# state can be:
-#   open
-#   held_user       -> held for a specific user_id (M1/M2)
-#   held_group      -> held for a group_key (T1 / cinova)
-#   reserved        -> booked by reserved_for_user_id
-#
-# prefs table stores per-user notification preference
-
-
 @dataclass
 class SpotRecord:
     spot_id: str
@@ -123,14 +81,17 @@ class SpotRecord:
     held_for_group: Optional[str]
 
 
+# -----------------------------
+# Helpers
+# -----------------------------
+def local_now() -> datetime:
+    return datetime.now(ZoneInfo(PARKING_TIMEZONE))
+
+
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     return conn
-
-
-def local_now() -> datetime:
-    return datetime.now(ZoneInfo(PARKING_TIMEZONE))
 
 
 def init_db() -> None:
@@ -155,9 +116,9 @@ def init_db() -> None:
         )
         """)
 
-        # Seed or repair canonical rows spot by spot
         now = local_now().isoformat()
-        canonical_defaults = {
+
+        defaults = {
             M1: ("held_user", None, RANDY_ID, None),
             M2: ("held_user", None, KYLIE_ID, None),
             P1: ("open", None, None, None),
@@ -171,8 +132,9 @@ def init_db() -> None:
                 "SELECT spot_id FROM reservations WHERE spot_id = ?",
                 (spot_id,),
             ).fetchone()
+
             if not row:
-                state, reserved_for_user_id, held_for_user_id, held_for_group = canonical_defaults[spot_id]
+                state, reserved_for_user_id, held_for_user_id, held_for_group = defaults[spot_id]
                 cur.execute(
                     """
                     INSERT INTO reservations (
@@ -191,55 +153,6 @@ def init_db() -> None:
                 )
 
         conn.commit()
-
-
-def get_spot(spot_id: str) -> SpotRecord:
-    with closing(get_db()) as conn:
-        row = conn.execute(
-            """
-            SELECT spot_id, state, reserved_for_user_id, held_for_user_id, held_for_group
-            FROM reservations
-            WHERE spot_id = ?
-            """,
-            (spot_id,),
-        ).fetchone()
-        return SpotRecord(
-            spot_id=row["spot_id"],
-            state=row["state"],
-            reserved_for_user_id=row["reserved_for_user_id"],
-            held_for_user_id=row["held_for_user_id"],
-            held_for_group=row["held_for_group"],
-        )
-
-
-def get_all_spots() -> List[SpotRecord]:
-    with closing(get_db()) as conn:
-        rows = conn.execute(
-            """
-            SELECT spot_id, state, reserved_for_user_id, held_for_user_id, held_for_group
-            FROM reservations
-            ORDER BY CASE spot_id
-                WHEN 'M1' THEN 1
-                WHEN 'M2' THEN 2
-                WHEN 'P1' THEN 3
-                WHEN 'P2' THEN 4
-                WHEN 'P3' THEN 5
-                WHEN 'T1' THEN 6
-                ELSE 99
-            END
-            """
-        ).fetchall()
-
-    return [
-        SpotRecord(
-            spot_id=r["spot_id"],
-            state=r["state"],
-            reserved_for_user_id=r["reserved_for_user_id"],
-            held_for_user_id=r["held_for_user_id"],
-            held_for_group=r["held_for_group"],
-        )
-        for r in rows
-    ]
 
 
 def set_spot_state(
@@ -272,14 +185,54 @@ def set_spot_state(
         conn.commit()
 
 
-def reset_for_new_day() -> None:
-    # 5 PM reset
-    set_spot_state(M1, "held_user", held_for_user_id=RANDY_ID)
-    set_spot_state(M2, "held_user", held_for_user_id=KYLIE_ID)
-    set_spot_state(P1, "open")
-    set_spot_state(P2, "open")
-    set_spot_state(P3, "open")
-    set_spot_state(T1, "held_group", held_for_group="cinova")
+def get_spot(spot_id: str) -> SpotRecord:
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT spot_id, state, reserved_for_user_id, held_for_user_id, held_for_group
+            FROM reservations
+            WHERE spot_id = ?
+            """,
+            (spot_id,),
+        ).fetchone()
+
+    return SpotRecord(
+        spot_id=row["spot_id"],
+        state=row["state"],
+        reserved_for_user_id=row["reserved_for_user_id"],
+        held_for_user_id=row["held_for_user_id"],
+        held_for_group=row["held_for_group"],
+    )
+
+
+def get_all_spots() -> List[SpotRecord]:
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            """
+            SELECT spot_id, state, reserved_for_user_id, held_for_user_id, held_for_group
+            FROM reservations
+            ORDER BY CASE spot_id
+                WHEN 'M1' THEN 1
+                WHEN 'M2' THEN 2
+                WHEN 'P1' THEN 3
+                WHEN 'P2' THEN 4
+                WHEN 'P3' THEN 5
+                WHEN 'T1' THEN 6
+                ELSE 99
+            END
+            """
+        ).fetchall()
+
+    return [
+        SpotRecord(
+            spot_id=r["spot_id"],
+            state=r["state"],
+            reserved_for_user_id=r["reserved_for_user_id"],
+            held_for_user_id=r["held_for_user_id"],
+            held_for_group=r["held_for_group"],
+        )
+        for r in rows
+    ]
 
 
 def get_user_booked_spot(user_id: str) -> Optional[str]:
@@ -293,7 +246,8 @@ def get_user_booked_spot(user_id: str) -> Optional[str]:
             """,
             (user_id,),
         ).fetchone()
-        return row["spot_id"] if row else None
+
+    return row["spot_id"] if row else None
 
 
 def notifications_enabled(user_id: str) -> bool:
@@ -306,12 +260,14 @@ def notifications_enabled(user_id: str) -> bool:
             """,
             (user_id,),
         ).fetchone()
-        if not row:
-            return True
-        return bool(row["notifications_enabled"])
+
+    if not row:
+        return True
+
+    return bool(row["notifications_enabled"])
 
 
-def toggle_notifications(user_id: str) -> bool:
+def toggle_notifications_for_user(user_id: str) -> bool:
     with closing(get_db()) as conn:
         row = conn.execute(
             """
@@ -343,22 +299,18 @@ def toggle_notifications(user_id: str) -> bool:
             )
 
         conn.commit()
-        return bool(new_value)
+
+    return bool(new_value)
 
 
 def maybe_dm(user_id: str, text: str) -> None:
     if not notifications_enabled(user_id):
         return
+
     try:
         slack_app.client.chat_postMessage(channel=user_id, text=text)
     except Exception:
         pass
-
-
-def user_can_claim_group_hold(user_id: str, group_key: Optional[str]) -> bool:
-    if group_key == "cinova":
-        return user_id in CINOVA_USER_IDS
-    return False
 
 
 def reserve_for_user(user_id: str) -> str:
@@ -366,22 +318,22 @@ def reserve_for_user(user_id: str) -> str:
     if existing:
         return f"You have Spot {existing} today."
 
-    # 1) Claim user's own management hold
-    for held_user_id, held_spot in MANAGEMENT_DEFAULTS.items():
-        if user_id == held_user_id:
-            spot = get_spot(held_spot)
-            if spot.state == "held_user" and spot.held_for_user_id == user_id:
-                set_spot_state(held_spot, "reserved", reserved_for_user_id=user_id)
-                return f"You have Spot {held_spot} today."
+    # 1. User claims their own management hold
+    if user_id in MANAGEMENT_DEFAULTS:
+        management_spot = MANAGEMENT_DEFAULTS[user_id]
+        spot = get_spot(management_spot)
+        if spot.state == "held_user" and spot.held_for_user_id == user_id:
+            set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
+            return f"You have Spot {management_spot} today."
 
-    # 2) Claim T1 if user is Cinova and T1 is group-held
+    # 2. Cinova users can claim T1 if held for Cinova
     if user_id in CINOVA_USER_IDS:
-        spot = get_spot(T1)
-        if spot.state == "held_group" and spot.held_for_group == "cinova":
+        t1 = get_spot(T1)
+        if t1.state == "held_group" and t1.held_for_group == "cinova":
             set_spot_state(T1, "reserved", reserved_for_user_id=user_id)
             return f"You have Spot {T1} today."
 
-    # 3) Otherwise book first open spot in display order
+    # 3. Otherwise take first open spot
     for spot_id in SPOT_ORDER:
         spot = get_spot(spot_id)
         if spot.state == "open":
@@ -396,9 +348,20 @@ def cancel_for_user(user_id: str) -> str:
     if not booked_spot:
         return "You do not have a booking to cancel."
 
-    # Cancellation makes the spot open immediately, per your latest UI rule.
+    # Per your requested behavior:
+    # if M1 or M2 is cancelled manually, it becomes Open right away
+    # same behavior for all spots
     set_spot_state(booked_spot, "open")
     return f"Spot {booked_spot} is now open."
+
+
+def reset_for_5pm() -> None:
+    set_spot_state(M1, "held_user", held_for_user_id=RANDY_ID)
+    set_spot_state(M2, "held_user", held_for_user_id=KYLIE_ID)
+    set_spot_state(P1, "open")
+    set_spot_state(P2, "open")
+    set_spot_state(P3, "open")
+    set_spot_state(T1, "held_group", held_for_group="cinova")
 
 
 def display_line_for_spot(spot: SpotRecord) -> str:
@@ -417,8 +380,10 @@ def display_line_for_spot(spot: SpotRecord) -> str:
         else:
             status = "Held"
     elif spot.state == "reserved":
-        pretty = DISPLAY_NAMES.get(spot.reserved_for_user_id, f"<@{spot.reserved_for_user_id}>")
-        status = f"Booked by {pretty}"
+        if spot.reserved_for_user_id in DISPLAY_NAMES:
+            status = f"Booked by {DISPLAY_NAMES[spot.reserved_for_user_id]}"
+        else:
+            status = f"Booked by <@{spot.reserved_for_user_id}>"
     else:
         status = spot.state
 
@@ -432,13 +397,13 @@ def parking_home_blocks(user_id: str) -> list:
     else:
         booking_text = "You do not have a booking today."
 
-    notif_text = "Notifications: On" if notifications_enabled(user_id) else "Notifications: Off"
     refreshed = local_now().strftime("%-I:%M:%S %p")
+    notif_text = "Notifications: On" if notifications_enabled(user_id) else "Notifications: Off"
 
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": "Parking", "emoji": True},
+            "text": {"type": "plain_text", "text": "Office Parking", "emoji": True},
         },
         {
             "type": "section",
@@ -507,7 +472,7 @@ def publish_home(user_id: str) -> None:
 
 
 # -----------------------------
-# Slack listeners
+# Slack event handlers
 # -----------------------------
 @slack_app.event("app_home_opened")
 def on_app_home_opened(event, logger):
@@ -546,19 +511,19 @@ def refresh_home_action(ack, body):
     ack()
     user_id = body["user"]["id"]
     publish_home(user_id)
-    # No DM for refresh to reduce noise
 
 
 @slack_app.action("toggle_notifications")
 def toggle_notifications_action(ack, body):
     ack()
     user_id = body["user"]["id"]
-    new_value = toggle_notifications(user_id)
+    now_enabled = toggle_notifications_for_user(user_id)
     publish_home(user_id)
+
     try:
         slack_app.client.chat_postMessage(
             channel=user_id,
-            text="Notifications turned on." if new_value else "Notifications turned off.",
+            text="Notifications turned on." if now_enabled else "Notifications turned off.",
         )
     except Exception:
         pass
@@ -567,6 +532,11 @@ def toggle_notifications_action(ack, body):
 # -----------------------------
 # FastAPI routes
 # -----------------------------
+@api.get("/")
+def root():
+    return {"status": "Parking bot is running"}
+
+
 @api.get("/health")
 def health():
     return {"ok": True, "time": local_now().isoformat()}
@@ -574,14 +544,26 @@ def health():
 
 @api.post("/slack/events")
 async def slack_events(req: Request):
+    # Handle Slack URL verification explicitly
+    raw_body = await req.body()
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        payload = {}
+
+    if payload.get("type") == "url_verification":
+        return JSONResponse({"challenge": payload["challenge"]})
+
+    # All normal Slack requests go to Bolt
     return await handler.handle(req)
 
 
 # -----------------------------
-# Daily 5 PM reset
+# Scheduler
 # -----------------------------
-def scheduled_5pm_reset():
-    reset_for_new_day()
+def scheduled_5pm_reset() -> None:
+    reset_for_5pm()
     print("Parking reset completed at 5:00 PM local time")
 
 
@@ -593,9 +575,3 @@ init_db()
 scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
 scheduler.add_job(scheduled_5pm_reset, "cron", hour=17, minute=0)
 scheduler.start()
-
-
-# -----------------------------
-# Local run reminder
-# -----------------------------
-# uvicorn parking_bot_final:api --reload --port 3000
