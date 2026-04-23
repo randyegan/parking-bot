@@ -314,7 +314,25 @@ def maybe_dm(user_id: str, text: str) -> None:
         slack_app.client.chat_postMessage(channel=user_id, text=text)
     except Exception:
         pass
+        
+def publish_home_all_users() -> None:
+    users = set([RANDY_ID, KYLIE_ID, MIKE_ID, PETER_ID])
 
+    with closing(get_db()) as conn:
+        rows = conn.execute("""
+            SELECT DISTINCT reserved_for_user_id FROM reservations
+            WHERE reserved_for_user_id IS NOT NULL
+        """).fetchall()
+
+        for r in rows:
+            if r["reserved_for_user_id"]:
+                users.add(r["reserved_for_user_id"])
+
+    for u in users:
+        try:
+            publish_home(u)
+        except Exception:
+            pass
 
 # -----------------------------
 # Parking logic
@@ -491,7 +509,9 @@ def reserve_today_action(ack, body):
     ack()
     user_id = body["user"]["id"]
     message = reserve_for_user(user_id)
-    publish_home(user_id)
+
+    publish_home_all_users()   # ← changed
+
     maybe_dm(user_id, f":parking: {message}")
 
 
@@ -500,7 +520,9 @@ def Release_today_action(ack, body):
     ack()
     user_id = body["user"]["id"]
     message = Release_for_user(user_id)
-    publish_home(user_id)
+
+    publish_home_all_users()   # ← changed
+
     maybe_dm(user_id, f":parking: {message}")
 
 
