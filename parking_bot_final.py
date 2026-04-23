@@ -575,8 +575,8 @@ def publish_home_all_users() -> None:
 def reserve_for_user(user_id: str) -> str:
     existing = get_user_booked_spot(user_id)
     if existing:
-       label = DISPLAY_SPOT_NAMES.get(existing, existing)
-return f"You have Spot {label} today."
+        label = DISPLAY_SPOT_NAMES.get(existing, existing)
+        return f"You have Spot {label} today."
 
     if user_id in MANAGEMENT_DEFAULTS:
         management_spot = MANAGEMENT_DEFAULTS[user_id]
@@ -584,21 +584,21 @@ return f"You have Spot {label} today."
         if spot.state == "held_user" and spot.held_for_user_id == user_id:
             set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
             label = DISPLAY_SPOT_NAMES.get(management_spot, management_spot)
-return f"You have Spot {label} today."
+            return f"You have Spot {label} today."
 
     if user_id in CINOVA_USER_IDS:
         t1 = get_spot(T1)
         if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
             set_spot_state(T1, "reserved", reserved_for_user_id=user_id)
-         label = DISPLAY_SPOT_NAMES.get(T1, T1)
-return f"You have Spot {label} today."
+            label = DISPLAY_SPOT_NAMES.get(T1, T1)
+            return f"You have Spot {label} today."
 
     for spot_id in SPOT_ORDER:
         spot = get_spot(spot_id)
         if spot.state == "open":
             set_spot_state(spot_id, "reserved", reserved_for_user_id=user_id)
-          label = DISPLAY_SPOT_NAMES.get(T1, T1)
-return f"You have Spot {label} today."
+            label = DISPLAY_SPOT_NAMES.get(spot_id, spot_id)
+            return f"You have Spot {label} today."
 
     return "Sorry, all spots are reserved for today."
 
@@ -609,8 +609,8 @@ def release_for_user(user_id: str) -> str:
         return "You do not have a booking to release."
 
     set_spot_state(booked_spot, "open")
-   label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
-return f"Spot {label} is now open."
+    label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
+    return f"Spot {label} is now open."
 
 
 def reset_for_5pm() -> None:
