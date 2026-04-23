@@ -211,34 +211,14 @@ def get_spot(spot_id: str) -> SpotRecord:
     )
 
 
-def get_all_spots() -> List[SpotRecord]:
+def get_all():
     with closing(get_db()) as conn:
-        rows = conn.execute(
-            """
-            SELECT spot_id, state, reserved_for_user_id, held_for_user_id, held_for_group
-            FROM reservations
-            ORDER BY CASE spot_id
-                WHEN 'M1' THEN 1
-                WHEN 'M2' THEN 2
-                WHEN 'P1' THEN 3
-                WHEN 'P2' THEN 4
-                WHEN 'P3' THEN 5
-                WHEN 'T1' THEN 6
-                ELSE 99
-            END
-            """
-        ).fetchall()
-
-    return [
-        SpotRecord(
-            spot_id=r["spot_id"],
-            state=r["state"],
-            reserved_for_user_id=r["reserved_for_user_id"],
-            held_for_user_id=r["held_for_user_id"],
-            held_for_group=r["held_for_group"],
-        )
-        for r in rows
-    ]
+        rows = conn.execute("SELECT * FROM spots").fetchall()
+        return [
+            Spot(*r)
+            for r in rows
+            if r["spot_id"] in SPOT_ORDER
+        ]
 
 
 def get_user_booked_spot(user_id: str) -> Optional[str]:
