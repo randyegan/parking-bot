@@ -453,6 +453,30 @@ def has_any_available_spot_for_user(user_id: str) -> bool:
 
     return False
 
+def spot_available_to_user(spot: SpotRecord, user_id: str) -> bool:
+    if spot.state == "open":
+        return True
+
+    if spot.state == "held_user" and spot.held_for_user_id == user_id:
+        return True
+
+    if (
+        spot.state == "held_group"
+        and spot.held_for_group == CINOVA_GROUP_KEY
+        and user_id in CINOVA_USER_IDS
+    ):
+        return True
+
+    return False
+
+
+def available_spots_for_user(user_id: str) -> List[SpotRecord]:
+    return [
+        spot
+        for spot in get_all_spots()
+        if spot_available_to_user(spot, user_id)
+    ]
+
 
 def parking_home_blocks(user_id: str) -> list:
     booked_spot = get_user_booked_spot(user_id)
@@ -501,11 +525,26 @@ def parking_home_blocks(user_id: str) -> list:
             {
                 "type": "actions",
                 "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Reserve"},
-                        "action_id": "reserve_today",
-                    },
+                   {
+    "type": "static_select",
+    "placeholder": {"type": "plain_text", "text": "Reserve spot"},
+    "action_id": "reserve_spot_select",
+    "options": [
+        {
+            "text": {
+                "type": "plain_text",
+                "text": DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id),
+            },
+            "value": spot.spot_id,
+        }
+        for spot in available_spots_for_user(user_id)
+    ] or [
+        {
+            "text": {"type": "plain_text", "text": "No spots available"},
+            "value": "none",
+        }
+    ],
+},
                     {
                         "type": "button",
                         "text": {"type": "plain_text", "text": "Release"},
@@ -573,45 +612,69 @@ def publish_home_all_users() -> None:
 # -----------------------------
 # Parking logic
 # -----------------------------
-def reserve_for_user(user_id: str) -> str:
+def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> str:
     existing = get_user_booked_spot(user_id)
     if existing:
         label = DISPLAY_SPOT_NAMES.get(existing, existing)
+        return f"You already have Spot {label} today."
+
+    available = available_spots_for_user(user_id)
+
+    if requested_spot_id:
+        if requested_spot_id == "none":
+            return "Sorry, no spots are available."
+
+        matching = [s for s in available if s.spot_id == requested_spot_id]
+        if not matching:
+            label = DISPLAY_SPOT_NAMES.get(requested_spot_id, requested_spot_id)
+            return f"Spot {label} is not available to reserve."
+
+        set_spot_state(requested_spot_id, "reserved", reserved_for_user_id=user_id)
+        label = DISPLAY_SPOT_NAMES.get(requested_spot_id, requested_spot_id)
         return f"You have Spot {label} today."
 
-    if user_id in MANAGEMENT_DEFAULTS:
-        management_spot = MANAGEMENT_DEFAULTS[user_id]
-        spot = get_spot(management_spot)
-        if spot.state == "held_user" and spot.held_for_user_id == user_id:
-            set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
-            label = DISPLAY_SPOT_NAMES.get(management_spot, management_spot)
-            return f"You have Spot {label} today."
+    if not available:
+        return "Sorry, all spots are reserved for today."
+
+    spot = available[0]
+    set_spot_state(spot.spot_id, "reserved", reserved_for_user_id=user_id)
+    label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
+    return f"You have Spot {label} today."
+
+def release_for_user(user_id: str) -> str:
+    booked_spot = get_user_booked_spot(user_id)
+
+    if booked_spot:
+        set_spot_state(booked_spot, "open")
+        label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
+        return f"Spot {label} is now open."
+
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT spot_id
+            FROM reservations
+            WHERE state = 'held_user' AND held_for_user_id = ?
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+
+    if row:
+        spot_id = row["spot_id"]
+        set_spot_state(spot_id, "open")
+        label = DISPLAY_SPOT_NAMES.get(spot_id, spot_id)
+        return f"Spot {label} is now open."
 
     if user_id in CINOVA_USER_IDS:
         t1 = get_spot(T1)
         if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
-            set_spot_state(T1, "reserved", reserved_for_user_id=user_id)
+            set_spot_state(T1, "open")
             label = DISPLAY_SPOT_NAMES.get(T1, T1)
-            return f"You have Spot {label} today."
+            return f"Spot {label} is now open."
 
-    for spot_id in SPOT_ORDER:
-        spot = get_spot(spot_id)
-        if spot.state == "open":
-            set_spot_state(spot_id, "reserved", reserved_for_user_id=user_id)
-            label = DISPLAY_SPOT_NAMES.get(spot_id, spot_id)
-            return f"You have Spot {label} today."
+    return "You do not have a booking or held spot to release."
 
-    return "Sorry, all spots are reserved for today."
-
-
-def release_for_user(user_id: str) -> str:
-    booked_spot = get_user_booked_spot(user_id)
-    if not booked_spot:
-        return "You do not have a booking to release."
-
-    set_spot_state(booked_spot, "open")
-    label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
-    return f"Spot {label} is now open."
 
 
 def reset_for_5pm() -> None:
@@ -669,6 +732,18 @@ def reserve_today_action(ack, body):
     ack()
     user_id = body["user"]["id"]
     message = reserve_for_user(user_id)
+    publish_home_all_users()
+    update_parking_board()
+    maybe_dm(user_id, f":parking: {message}")
+
+@slack_app.action("reserve_spot_select")
+def reserve_spot_select_action(ack, body):
+    ack()
+    user_id = body["user"]["id"]
+    selected_spot = body["actions"][0]["selected_option"]["value"]
+
+    message = reserve_for_user(user_id, selected_spot)
+
     publish_home_all_users()
     update_parking_board()
     maybe_dm(user_id, f":parking: {message}")
@@ -733,7 +808,7 @@ async def lifespan(app: FastAPI):
     update_parking_board()
 
     scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
-    scheduler.add_job(scheduled_5pm_reset, "cron", hour=17, minute=0)
+    scheduler.add_job(scheduled_5pm_reset, "cron", day_of_week="mon-fri", hour=17, minute=0)
     scheduler.start()
     print("Scheduler started", flush=True)
 
