@@ -97,7 +97,22 @@ class SpotRecord:
 # -----------------------------
 def local_now() -> datetime:
     return datetime.now(ZoneInfo(PARKING_TIMEZONE))
+    
+def booking_day_text() -> str:
+    now = local_now()
 
+    if now.hour < 17:
+        return "today"
+
+    # Friday after 5pm, Saturday, and Sunday bookings carry through until Monday 5pm.
+    if now.weekday() == 4:
+        return "Monday"
+    if now.weekday() == 5:
+        return "Monday"
+    if now.weekday() == 6:
+        return "Monday"
+
+    return "tomorrow"
 
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DATABASE_PATH)
@@ -460,8 +475,10 @@ def spot_available_to_user(spot: SpotRecord, user_id: str) -> bool:
     if spot.state == "held_user" and spot.held_for_user_id == user_id:
         return True
 
+    # T1 is available only to Cinova users when held for Cinova.
     if (
-        spot.state == "held_group"
+        spot.spot_id == T1
+        and spot.state == "held_group"
         and spot.held_for_group == CINOVA_GROUP_KEY
         and user_id in CINOVA_USER_IDS
     ):
@@ -483,7 +500,7 @@ def parking_home_blocks(user_id: str) -> list:
 
     if booked_spot:
         label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
-        booking_text = f"You have Spot {label} today."
+        booking_text = f"You have Spot {label} {booking_day_text()}."
     elif has_any_available_spot_for_user(user_id):
         booking_text = "You do not have a booking today."
     else:
@@ -616,7 +633,7 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
     existing = get_user_booked_spot(user_id)
     if existing:
         label = DISPLAY_SPOT_NAMES.get(existing, existing)
-        return f"You already have Spot {label} today."
+       return f"You already have Spot {label} {booking_day_text()}."
 
     available = available_spots_for_user(user_id)
 
@@ -631,15 +648,15 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
 
         set_spot_state(requested_spot_id, "reserved", reserved_for_user_id=user_id)
         label = DISPLAY_SPOT_NAMES.get(requested_spot_id, requested_spot_id)
-        return f"You have Spot {label} today."
+       return f"You have Spot {label} {booking_day_text()}."
 
     if not available:
-        return "Sorry, all spots are reserved for today."
+        return f"Sorry, all spots are reserved for {booking_day_text()}."
 
     spot = available[0]
     set_spot_state(spot.spot_id, "reserved", reserved_for_user_id=user_id)
     label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
-    return f"You have Spot {label} today."
+    return f"You have Spot {label} {booking_day_text()}."
 
 def release_for_user(user_id: str) -> str:
     booked_spot = get_user_booked_spot(user_id)
@@ -649,6 +666,7 @@ def release_for_user(user_id: str) -> str:
         label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
         return f"Spot {label} is now open."
 
+    # Allow held personal spots, like Kylie's M2, to be released to Open.
     with closing(get_db()) as conn:
         row = conn.execute(
             """
@@ -666,9 +684,16 @@ def release_for_user(user_id: str) -> str:
         label = DISPLAY_SPOT_NAMES.get(spot_id, spot_id)
         return f"Spot {label} is now open."
 
+    # Allow Mike or Peter to release T1, whether it is held or booked by either Cinova user.
     if user_id in CINOVA_USER_IDS:
         t1 = get_spot(T1)
+
         if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
+            set_spot_state(T1, "open")
+            label = DISPLAY_SPOT_NAMES.get(T1, T1)
+            return f"Spot {label} is now open."
+
+        if t1.state == "reserved" and t1.reserved_for_user_id in CINOVA_USER_IDS:
             set_spot_state(T1, "open")
             label = DISPLAY_SPOT_NAMES.get(T1, T1)
             return f"Spot {label} is now open."
