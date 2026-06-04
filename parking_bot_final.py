@@ -35,8 +35,8 @@ if not SLACK_BOT_TOKEN or not SLACK_SIGNING_SECRET:
 # -----------------------------
 RANDY_ID = "U1HMCS77V"
 KYLIE_ID = "UR0JZ0GR0"
-MIKE_ID = "D09JD3C89T8"
-PETER_ID = "D09JHK9Q3PU"
+MIKE_ID = "U03EH8HM4G0"
+PETER_ID = "U03DVSASKPE"
 
 M1 = "M1"
 M2 = "M2"
@@ -775,7 +775,20 @@ def reserve_spot_select_action(ack, body):
     user_id = body["user"]["id"]
     selected_spot = body["actions"][0]["selected_option"]["value"]
 
+    print(f"USER ID = {user_id}", flush=True)
+    print(f"SPOT = {selected_spot}", flush=True)
+
+    try:
+        slack_app.client.chat_postMessage(
+            channel=PARKING_CHANNEL_ID,
+            text=f"DEBUG: reserve click from user {user_id} for spot {selected_spot}"
+        )
+    except Exception as e:
+        print(f"DEBUG MESSAGE FAILED: {e}", flush=True)
+
     message = reserve_for_user(user_id, selected_spot)
+
+    print(f"RESULT = {message}", flush=True)
 
     publish_home_all_users()
     update_parking_board()
