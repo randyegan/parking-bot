@@ -454,18 +454,14 @@ def display_line_for_spot(spot: SpotRecord) -> str:
 
 
 def spot_available_to_user(spot: SpotRecord, user_id: str) -> bool:
+    # T1 is only available to Mike/Peter when it is not already reserved.
+    if spot.spot_id == T1:
+        return user_id in CINOVA_USER_IDS and spot.state != "reserved"
+
     if spot.state == "open":
         return True
 
     if spot.state == "held_user" and spot.held_for_user_id == user_id:
-        return True
-
-    if (
-        spot.spot_id == T1
-        and spot.state == "held_group"
-        and spot.held_for_group == CINOVA_GROUP_KEY
-        and user_id in CINOVA_USER_IDS
-    ):
         return True
 
     return False
@@ -633,6 +629,10 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
         label = DISPLAY_SPOT_NAMES.get(existing, existing)
         return f"You already have Spot {label} {booking_day_text()}."
 
+    # If Mike or Peter uses /parking reserve, prioritize T1.
+    if user_id in CINOVA_USER_IDS and not requested_spot_id:
+        requested_spot_id = T1
+
     available = available_spots_for_user(user_id)
 
     if requested_spot_id:
@@ -656,8 +656,7 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
     set_spot_state(spot.spot_id, "reserved", reserved_for_user_id=user_id)
     label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
     return f"You have Spot {label} {booking_day_text()}."
-
-
+    
 def release_for_user(user_id: str) -> str:
     booked_spot = get_user_booked_spot(user_id)
 
