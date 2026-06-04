@@ -633,7 +633,7 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
     existing = get_user_booked_spot(user_id)
     if existing:
         label = DISPLAY_SPOT_NAMES.get(existing, existing)
-       return f"You already have Spot {label} {booking_day_text()}."
+         return f"You already have Spot {label} {booking_day_text()}."
 
     available = available_spots_for_user(user_id)
 
@@ -648,7 +648,7 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
 
         set_spot_state(requested_spot_id, "reserved", reserved_for_user_id=user_id)
         label = DISPLAY_SPOT_NAMES.get(requested_spot_id, requested_spot_id)
-       return f"You have Spot {label} {booking_day_text()}."
+         return f"You have Spot {label} {booking_day_text()}."
 
     if not available:
         return f"Sorry, all spots are reserved for {booking_day_text()}."
