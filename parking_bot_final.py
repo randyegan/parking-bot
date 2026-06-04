@@ -97,7 +97,8 @@ class SpotRecord:
 # -----------------------------
 def local_now() -> datetime:
     return datetime.now(ZoneInfo(PARKING_TIMEZONE))
-    
+
+
 def booking_day_text() -> str:
     now = local_now()
 
@@ -105,14 +106,11 @@ def booking_day_text() -> str:
         return "today"
 
     # Friday after 5pm, Saturday, and Sunday bookings carry through until Monday 5pm.
-    if now.weekday() == 4:
-        return "Monday"
-    if now.weekday() == 5:
-        return "Monday"
-    if now.weekday() == 6:
+    if now.weekday() in [4, 5, 6]:
         return "Monday"
 
     return "tomorrow"
+
 
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DATABASE_PATH)
@@ -294,6 +292,7 @@ def notifications_enabled(user_id: str) -> bool:
 
     if row is None:
         return True
+
     return bool(row["notifications_enabled"])
 
 
@@ -382,6 +381,7 @@ def board_line_for_spot(spot: SpotRecord) -> str:
 
 def build_board_text() -> str:
     lines = ["🚗 *Office Parking Board*\n"]
+
     for spot in get_all_spots():
         lines.append(board_line_for_spot(spot))
 
@@ -410,7 +410,9 @@ def update_parking_board() -> None:
                 text=text,
             )
             save_board_ts(resp["ts"])
+
         print("Parking board updated", flush=True)
+
     except Exception as e:
         print(f"Board update failed: {e}", flush=True)
 
@@ -427,6 +429,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
             name = DISPLAY_NAMES[spot.held_for_user_id]
         else:
             name = f"<@{spot.held_for_user_id}>"
+
         status = f"🟡 Held for {name}"
 
     elif spot.state == "held_group":
@@ -440,6 +443,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
             name = DISPLAY_NAMES[spot.reserved_for_user_id]
         else:
             name = f"<@{spot.reserved_for_user_id}>"
+
         status = f"🔴 Booked by {name}"
 
     else:
@@ -449,25 +453,6 @@ def display_line_for_spot(spot: SpotRecord) -> str:
     return f"{label} - {status}"
 
 
-def has_any_available_spot_for_user(user_id: str) -> bool:
-    if user_id in MANAGEMENT_DEFAULTS:
-        management_spot = MANAGEMENT_DEFAULTS[user_id]
-        spot = get_spot(management_spot)
-        if spot.state == "held_user" and spot.held_for_user_id == user_id:
-            return True
-
-    if user_id in CINOVA_USER_IDS:
-        t1 = get_spot(T1)
-        if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
-            return True
-
-    for spot_id in SPOT_ORDER:
-        spot = get_spot(spot_id)
-        if spot.state == "open":
-            return True
-
-    return False
-
 def spot_available_to_user(spot: SpotRecord, user_id: str) -> bool:
     if spot.state == "open":
         return True
@@ -475,7 +460,6 @@ def spot_available_to_user(spot: SpotRecord, user_id: str) -> bool:
     if spot.state == "held_user" and spot.held_for_user_id == user_id:
         return True
 
-    # T1 is available only to Cinova users when held for Cinova.
     if (
         spot.spot_id == T1
         and spot.state == "held_group"
@@ -495,6 +479,10 @@ def available_spots_for_user(user_id: str) -> List[SpotRecord]:
     ]
 
 
+def has_any_available_spot_for_user(user_id: str) -> bool:
+    return len(available_spots_for_user(user_id)) > 0
+
+
 def parking_home_blocks(user_id: str) -> list:
     booked_spot = get_user_booked_spot(user_id)
 
@@ -502,12 +490,31 @@ def parking_home_blocks(user_id: str) -> list:
         label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
         booking_text = f"You have Spot {label} {booking_day_text()}."
     elif has_any_available_spot_for_user(user_id):
-        booking_text = "You do not have a booking today."
+        booking_text = f"You do not have a booking {booking_day_text()}."
     else:
-        booking_text = "Sorry, all spots are reserved for today."
+        booking_text = f"Sorry, all spots are reserved for {booking_day_text()}."
 
     refreshed = local_now().strftime("%-I:%M:%S %p")
     notif_text = "Notifications: On" if notifications_enabled(user_id) else "Notifications: Off"
+
+    available_options = [
+        {
+            "text": {
+                "type": "plain_text",
+                "text": DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id),
+            },
+            "value": spot.spot_id,
+        }
+        for spot in available_spots_for_user(user_id)
+    ]
+
+    if not available_options:
+        available_options = [
+            {
+                "text": {"type": "plain_text", "text": "No spots available"},
+                "value": "none",
+            }
+        ]
 
     blocks = [
         {
@@ -542,26 +549,12 @@ def parking_home_blocks(user_id: str) -> list:
             {
                 "type": "actions",
                 "elements": [
-                   {
-    "type": "static_select",
-    "placeholder": {"type": "plain_text", "text": "Reserve spot"},
-    "action_id": "reserve_spot_select",
-    "options": [
-        {
-            "text": {
-                "type": "plain_text",
-                "text": DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id),
-            },
-            "value": spot.spot_id,
-        }
-        for spot in available_spots_for_user(user_id)
-    ] or [
-        {
-            "text": {"type": "plain_text", "text": "No spots available"},
-            "value": "none",
-        }
-    ],
-},
+                    {
+                        "type": "static_select",
+                        "placeholder": {"type": "plain_text", "text": "Reserve spot"},
+                        "action_id": "reserve_spot_select",
+                        "options": available_options,
+                    },
                     {
                         "type": "button",
                         "text": {"type": "plain_text", "text": "Release"},
@@ -576,7 +569,9 @@ def parking_home_blocks(user_id: str) -> list:
                         "type": "button",
                         "text": {
                             "type": "plain_text",
-                            "text": "Turn off notifications" if notifications_enabled(user_id) else "Turn on notifications",
+                            "text": "Turn off notifications"
+                            if notifications_enabled(user_id)
+                            else "Turn on notifications",
                         },
                         "action_id": "toggle_notifications",
                     },
@@ -606,11 +601,13 @@ def all_known_user_ids() -> List[str]:
             WHERE reserved_for_user_id IS NOT NULL
             """
         ).fetchall()
+
         for r in rows:
             if r["reserved_for_user_id"]:
                 users.add(r["reserved_for_user_id"])
 
         rows = conn.execute("SELECT slack_user_id FROM user_prefs").fetchall()
+
         for r in rows:
             if r["slack_user_id"]:
                 users.add(r["slack_user_id"])
@@ -631,9 +628,10 @@ def publish_home_all_users() -> None:
 # -----------------------------
 def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> str:
     existing = get_user_booked_spot(user_id)
+
     if existing:
         label = DISPLAY_SPOT_NAMES.get(existing, existing)
-         return f"You already have Spot {label} {booking_day_text()}."
+        return f"You already have Spot {label} {booking_day_text()}."
 
     available = available_spots_for_user(user_id)
 
@@ -642,13 +640,14 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
             return "Sorry, no spots are available."
 
         matching = [s for s in available if s.spot_id == requested_spot_id]
+
         if not matching:
             label = DISPLAY_SPOT_NAMES.get(requested_spot_id, requested_spot_id)
             return f"Spot {label} is not available to reserve."
 
         set_spot_state(requested_spot_id, "reserved", reserved_for_user_id=user_id)
         label = DISPLAY_SPOT_NAMES.get(requested_spot_id, requested_spot_id)
-         return f"You have Spot {label} {booking_day_text()}."
+        return f"You have Spot {label} {booking_day_text()}."
 
     if not available:
         return f"Sorry, all spots are reserved for {booking_day_text()}."
@@ -658,6 +657,7 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
     label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
     return f"You have Spot {label} {booking_day_text()}."
 
+
 def release_for_user(user_id: str) -> str:
     booked_spot = get_user_booked_spot(user_id)
 
@@ -666,7 +666,6 @@ def release_for_user(user_id: str) -> str:
         label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
         return f"Spot {label} is now open."
 
-    # Allow held personal spots, like Kylie's M2, to be released to Open.
     with closing(get_db()) as conn:
         row = conn.execute(
             """
@@ -684,7 +683,6 @@ def release_for_user(user_id: str) -> str:
         label = DISPLAY_SPOT_NAMES.get(spot_id, spot_id)
         return f"Spot {label} is now open."
 
-    # Allow Mike or Peter to release T1, whether it is held or booked by either Cinova user.
     if user_id in CINOVA_USER_IDS:
         t1 = get_spot(T1)
 
@@ -699,7 +697,6 @@ def release_for_user(user_id: str) -> str:
             return f"Spot {label} is now open."
 
     return "You do not have a booking or held spot to release."
-
 
 
 def reset_for_5pm() -> None:
@@ -727,6 +724,10 @@ def parking_command(ack, body):
     user_id = body["user_id"]
     text = body.get("text", "").strip().lower()
 
+    if text == "whoami":
+        maybe_dm(user_id, f"Your Slack user ID is: {user_id}")
+        return
+
     if text in ["reserve", "book"]:
         message = reserve_for_user(user_id)
         publish_home_all_users()
@@ -748,22 +749,26 @@ def parking_command(ack, body):
 
     maybe_dm(
         user_id,
-        ":parking: Try `/parking reserve`, `/parking release`, or `/parking refresh`."
+        ":parking: Try `/parking reserve`, `/parking release`, `/parking refresh`, or `/parking whoami`."
     )
 
 
 @slack_app.action("reserve_today")
 def reserve_today_action(ack, body):
     ack()
+
     user_id = body["user"]["id"]
     message = reserve_for_user(user_id)
+
     publish_home_all_users()
     update_parking_board()
     maybe_dm(user_id, f":parking: {message}")
 
+
 @slack_app.action("reserve_spot_select")
 def reserve_spot_select_action(ack, body):
     ack()
+
     user_id = body["user"]["id"]
     selected_spot = body["actions"][0]["selected_option"]["value"]
 
@@ -777,8 +782,10 @@ def reserve_spot_select_action(ack, body):
 @slack_app.action("release_today")
 def release_today_action(ack, body):
     ack()
+
     user_id = body["user"]["id"]
     message = release_for_user(user_id)
+
     publish_home_all_users()
     update_parking_board()
     maybe_dm(user_id, f":parking: {message}")
@@ -787,6 +794,7 @@ def release_today_action(ack, body):
 @slack_app.action("refresh_home")
 def refresh_home_action(ack, body):
     ack()
+
     user_id = body["user"]["id"]
     publish_home(user_id)
     update_parking_board()
@@ -795,8 +803,10 @@ def refresh_home_action(ack, body):
 @slack_app.action("toggle_notifications")
 def toggle_notifications_action(ack, body):
     ack()
+
     user_id = body["user"]["id"]
     now_enabled = toggle_notifications_for_user(user_id)
+
     publish_home(user_id)
 
     try:
@@ -826,6 +836,7 @@ async def lifespan(app: FastAPI):
     global scheduler
 
     db_dir = os.path.dirname(DATABASE_PATH)
+
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
@@ -833,7 +844,13 @@ async def lifespan(app: FastAPI):
     update_parking_board()
 
     scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
-    scheduler.add_job(scheduled_5pm_reset, "cron", day_of_week="mon-fri", hour=17, minute=0)
+    scheduler.add_job(
+        scheduled_5pm_reset,
+        "cron",
+        day_of_week="mon-fri",
+        hour=17,
+        minute=0,
+    )
     scheduler.start()
     print("Scheduler started", flush=True)
 
@@ -841,6 +858,7 @@ async def lifespan(app: FastAPI):
 
     if scheduler:
         scheduler.shutdown()
+
     print("Scheduler stopped", flush=True)
 
 
