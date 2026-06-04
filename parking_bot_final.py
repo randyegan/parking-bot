@@ -768,6 +768,10 @@ def reserve_today_action(ack, body):
 def reserve_spot_select_action(ack, body):
     ack()
 
+    print("========== RESERVE CLICK ==========", flush=True)
+    print(json.dumps(body, indent=2), flush=True)
+    print("===================================", flush=True)
+
     user_id = body["user"]["id"]
     selected_spot = body["actions"][0]["selected_option"]["value"]
 
