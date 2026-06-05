@@ -768,27 +768,10 @@ def reserve_today_action(ack, body):
 def reserve_spot_select_action(ack, body):
     ack()
 
-    print("========== RESERVE CLICK ==========", flush=True)
-    print(json.dumps(body, indent=2), flush=True)
-    print("===================================", flush=True)
-
     user_id = body["user"]["id"]
     selected_spot = body["actions"][0]["selected_option"]["value"]
 
-    print(f"USER ID = {user_id}", flush=True)
-    print(f"SPOT = {selected_spot}", flush=True)
-
-    try:
-        slack_app.client.chat_postMessage(
-            channel=PARKING_CHANNEL_ID,
-            text=f"DEBUG: reserve click from user {user_id} for spot {selected_spot}"
-        )
-    except Exception as e:
-        print(f"DEBUG MESSAGE FAILED: {e}", flush=True)
-
     message = reserve_for_user(user_id, selected_spot)
-
-    print(f"RESULT = {message}", flush=True)
 
     publish_home_all_users()
     update_parking_board()
