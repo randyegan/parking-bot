@@ -105,7 +105,6 @@ def booking_day_text() -> str:
     if now.hour < 17:
         return "today"
 
-    # Friday after 5pm, Saturday, and Sunday bookings carry through until Monday 5pm.
     if now.weekday() in [4, 5, 6]:
         return "Monday"
 
@@ -144,11 +143,21 @@ def init_db() -> None:
             """
         )
 
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS management_away (
+                slack_user_id TEXT PRIMARY KEY,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL
+            )
+            """
+        )
+
         now = local_now().isoformat()
 
         defaults = {
-            M1: ("held_user", None, RANDY_ID, None),
-            M2: ("held_user", None, KYLIE_ID, None),
+            M1: ("reserved", RANDY_ID, None, None),
+            M2: ("reserved", KYLIE_ID, None, None),
             P1: ("open", None, None, None),
             P2: ("open", None, None, None),
             P3: ("open", None, None, None),
@@ -163,6 +172,7 @@ def init_db() -> None:
 
             if row is None:
                 state, reserved_for_user_id, held_for_user_id, held_for_group = defaults[spot_id]
+
                 cur.execute(
                     """
                     INSERT INTO reservations (
@@ -332,6 +342,52 @@ def toggle_notifications_for_user(user_id: str) -> bool:
     return bool(new_value)
 
 
+def user_is_away(user_id: str) -> bool:
+    today = local_now().date().isoformat()
+
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT start_date, end_date
+            FROM management_away
+            WHERE slack_user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+    if row is None:
+        return False
+
+    return row["start_date"] <= today <= row["end_date"]
+
+
+def set_user_away(user_id: str, start_date: str, end_date: str) -> None:
+    with closing(get_db()) as conn:
+        conn.execute(
+            """
+            INSERT INTO management_away (slack_user_id, start_date, end_date)
+            VALUES (?, ?, ?)
+            ON CONFLICT(slack_user_id)
+            DO UPDATE SET start_date = excluded.start_date,
+                          end_date = excluded.end_date
+            """,
+            (user_id, start_date, end_date),
+        )
+        conn.commit()
+
+
+def clear_user_away(user_id: str) -> None:
+    with closing(get_db()) as conn:
+        conn.execute(
+            """
+            DELETE FROM management_away
+            WHERE slack_user_id = ?
+            """,
+            (user_id,),
+        )
+        conn.commit()
+
+
 def maybe_dm(user_id: str, text: str) -> None:
     if not notifications_enabled(user_id):
         return
@@ -425,11 +481,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
         status = "🟢 Open"
 
     elif spot.state == "held_user":
-        if spot.held_for_user_id in DISPLAY_NAMES:
-            name = DISPLAY_NAMES[spot.held_for_user_id]
-        else:
-            name = f"<@{spot.held_for_user_id}>"
-
+        name = DISPLAY_NAMES.get(spot.held_for_user_id, f"<@{spot.held_for_user_id}>")
         status = f"🟡 Held for {name}"
 
     elif spot.state == "held_group":
@@ -439,11 +491,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
             status = "🟡 Held"
 
     elif spot.state == "reserved":
-        if spot.reserved_for_user_id in DISPLAY_NAMES:
-            name = DISPLAY_NAMES[spot.reserved_for_user_id]
-        else:
-            name = f"<@{spot.reserved_for_user_id}>"
-
+        name = DISPLAY_NAMES.get(spot.reserved_for_user_id, f"<@{spot.reserved_for_user_id}>")
         status = f"🔴 Booked by {name}"
 
     else:
@@ -454,14 +502,10 @@ def display_line_for_spot(spot: SpotRecord) -> str:
 
 
 def spot_available_to_user(spot: SpotRecord, user_id: str) -> bool:
-    # T1 is only available to Mike/Peter when it is not already reserved.
     if spot.spot_id == T1:
         return user_id in CINOVA_USER_IDS and spot.state != "reserved"
 
     if spot.state == "open":
-        return True
-
-    if spot.state == "held_user" and spot.held_for_user_id == user_id:
         return True
 
     return False
@@ -563,6 +607,16 @@ def parking_home_blocks(user_id: str) -> list:
                     },
                     {
                         "type": "button",
+                        "text": {"type": "plain_text", "text": "Set Away Dates"},
+                        "action_id": "open_away_modal",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Back / Book My Spot"},
+                        "action_id": "clear_away_dates",
+                    },
+                    {
+                        "type": "button",
                         "text": {
                             "type": "plain_text",
                             "text": "Turn off notifications"
@@ -629,7 +683,6 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
         label = DISPLAY_SPOT_NAMES.get(existing, existing)
         return f"You already have Spot {label} {booking_day_text()}."
 
-    # If Mike or Peter uses /parking reserve, prioritize T1.
     if user_id in CINOVA_USER_IDS and not requested_spot_id:
         requested_spot_id = T1
 
@@ -656,30 +709,18 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
     set_spot_state(spot.spot_id, "reserved", reserved_for_user_id=user_id)
     label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
     return f"You have Spot {label} {booking_day_text()}."
-    
+
+
 def release_for_user(user_id: str) -> str:
     booked_spot = get_user_booked_spot(user_id)
 
     if booked_spot:
-        set_spot_state(booked_spot, "open")
+        if booked_spot in [M1, M2] and user_id in MANAGEMENT_DEFAULTS:
+            set_spot_state(booked_spot, "open")
+        else:
+            set_spot_state(booked_spot, "open")
+
         label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
-        return f"Spot {label} is now open."
-
-    with closing(get_db()) as conn:
-        row = conn.execute(
-            """
-            SELECT spot_id
-            FROM reservations
-            WHERE state = 'held_user' AND held_for_user_id = ?
-            LIMIT 1
-            """,
-            (user_id,),
-        ).fetchone()
-
-    if row:
-        spot_id = row["spot_id"]
-        set_spot_state(spot_id, "open")
-        label = DISPLAY_SPOT_NAMES.get(spot_id, spot_id)
         return f"Spot {label} is now open."
 
     if user_id in CINOVA_USER_IDS:
@@ -695,12 +736,20 @@ def release_for_user(user_id: str) -> str:
             label = DISPLAY_SPOT_NAMES.get(T1, T1)
             return f"Spot {label} is now open."
 
-    return "You do not have a booking or held spot to release."
+    return "You do not have a booking to release."
 
 
 def reset_for_5pm() -> None:
-    set_spot_state(M1, "held_user", held_for_user_id=RANDY_ID)
-    set_spot_state(M2, "held_user", held_for_user_id=KYLIE_ID)
+    if user_is_away(RANDY_ID):
+        set_spot_state(M1, "open")
+    else:
+        set_spot_state(M1, "reserved", reserved_for_user_id=RANDY_ID)
+
+    if user_is_away(KYLIE_ID):
+        set_spot_state(M2, "open")
+    else:
+        set_spot_state(M2, "reserved", reserved_for_user_id=KYLIE_ID)
+
     set_spot_state(P1, "open")
     set_spot_state(P2, "open")
     set_spot_state(P3, "open")
@@ -790,12 +839,117 @@ def release_today_action(ack, body):
     maybe_dm(user_id, f":parking: {message}")
 
 
+@slack_app.action("open_away_modal")
+def open_away_modal_action(ack, body):
+    ack()
+
+    user_id = body["user"]["id"]
+
+    if user_id not in MANAGEMENT_DEFAULTS:
+        maybe_dm(user_id, ":parking: Only Randy and Kylie can set away dates.")
+        return
+
+    slack_app.client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "away_dates_submit",
+            "title": {"type": "plain_text", "text": "Away Dates"},
+            "submit": {"type": "plain_text", "text": "Save"},
+            "close": {"type": "plain_text", "text": "Cancel"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "start_date_block",
+                    "label": {"type": "plain_text", "text": "First day away"},
+                    "element": {
+                        "type": "datepicker",
+                        "action_id": "start_date",
+                    },
+                },
+                {
+                    "type": "input",
+                    "block_id": "end_date_block",
+                    "label": {"type": "plain_text", "text": "Last day away"},
+                    "element": {
+                        "type": "datepicker",
+                        "action_id": "end_date",
+                    },
+                },
+            ],
+        },
+    )
+
+
+@slack_app.action("clear_away_dates")
+def clear_away_dates_action(ack, body):
+    ack()
+
+    user_id = body["user"]["id"]
+
+    if user_id not in MANAGEMENT_DEFAULTS:
+        maybe_dm(user_id, ":parking: Only Randy and Kylie can use this button.")
+        return
+
+    clear_user_away(user_id)
+
+    management_spot = MANAGEMENT_DEFAULTS[user_id]
+    set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
+
+    label = DISPLAY_SPOT_NAMES.get(management_spot, management_spot)
+
+    maybe_dm(
+        user_id,
+        f":parking: Welcome back. Spot {label} is booked for you again."
+    )
+
+    publish_home_all_users()
+    update_parking_board()
+
+
 @slack_app.action("refresh_home")
 def refresh_home_action(ack, body):
     ack()
 
     user_id = body["user"]["id"]
     publish_home(user_id)
+    update_parking_board()
+
+
+@slack_app.view("away_dates_submit")
+def away_dates_submit_view(ack, body, view):
+    user_id = body["user"]["id"]
+
+    values = view["state"]["values"]
+    start_date = values["start_date_block"]["start_date"]["selected_date"]
+    end_date = values["end_date_block"]["end_date"]["selected_date"]
+
+    if start_date > end_date:
+        ack(
+            {
+                "response_action": "errors",
+                "errors": {
+                    "end_date_block": "End date must be after the start date."
+                },
+            }
+        )
+        return
+
+    ack()
+
+    set_user_away(user_id, start_date, end_date)
+
+    management_spot = MANAGEMENT_DEFAULTS[user_id]
+    set_spot_state(management_spot, "open")
+
+    label = DISPLAY_SPOT_NAMES.get(management_spot, management_spot)
+
+    maybe_dm(
+        user_id,
+        f":parking: Spot {label} will be open from {start_date} to {end_date}."
+    )
+
+    publish_home_all_users()
     update_parking_board()
 
 
