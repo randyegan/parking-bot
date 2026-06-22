@@ -583,49 +583,60 @@ def parking_home_blocks(user_id: str) -> list:
             }
         )
 
+    action_elements = [
+        {
+            "type": "static_select",
+            "placeholder": {"type": "plain_text", "text": "Reserve spot"},
+            "action_id": "reserve_spot_select",
+            "options": available_options,
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Release"},
+            "action_id": "release_today",
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Refresh"},
+            "action_id": "refresh_home",
+        },
+    ]
+
+    if user_id in MANAGEMENT_DEFAULTS:
+        action_elements.extend(
+            [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Set Away Dates"},
+                    "action_id": "open_away_modal",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Back / Book My Spot"},
+                    "action_id": "clear_away_dates",
+                },
+            ]
+        )
+
+    action_elements.append(
+        {
+            "type": "button",
+            "text": {
+                "type": "plain_text",
+                "text": "Turn off notifications"
+                if notifications_enabled(user_id)
+                else "Turn on notifications",
+            },
+            "action_id": "toggle_notifications",
+        }
+    )
+
     blocks.extend(
         [
             {"type": "divider"},
             {
                 "type": "actions",
-                "elements": [
-                    {
-                        "type": "static_select",
-                        "placeholder": {"type": "plain_text", "text": "Reserve spot"},
-                        "action_id": "reserve_spot_select",
-                        "options": available_options,
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Release"},
-                        "action_id": "release_today",
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Refresh"},
-                        "action_id": "refresh_home",
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Set Away Dates"},
-                        "action_id": "open_away_modal",
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Back / Book My Spot"},
-                        "action_id": "clear_away_dates",
-                    },
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "Turn off notifications"
-                            if notifications_enabled(user_id)
-                            else "Turn on notifications",
-                        },
-                        "action_id": "toggle_notifications",
-                    },
-                ],
+                "elements": action_elements,
             },
         ]
     )
