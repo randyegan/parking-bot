@@ -951,10 +951,11 @@ def away_dates_submit_view(ack, body, view):
     set_user_away(user_id, start_date, end_date)
 
     management_spot = MANAGEMENT_DEFAULTS[user_id]
-   if user_is_away(user_id):
-    set_spot_state(management_spot, "open")
-else:
-    set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
+
+    if user_is_away(user_id):
+        set_spot_state(management_spot, "open")
+    else:
+        set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
 
     label = DISPLAY_SPOT_NAMES.get(management_spot, management_spot)
 
@@ -965,7 +966,6 @@ else:
 
     publish_home_all_users()
     update_parking_board()
-
 
 @slack_app.action("toggle_notifications")
 def toggle_notifications_action(ack, body):
