@@ -5,7 +5,7 @@ import json
 import sqlite3
 from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 from zoneinfo import ZoneInfo
 
@@ -342,8 +342,25 @@ def toggle_notifications_for_user(user_id: str) -> bool:
     return bool(new_value)
 
 
+def parking_date() -> str:
+    now = local_now()
+    target_date = now.date()
+
+    if now.hour >= 17:
+        if now.weekday() == 4:
+            target_date = target_date + timedelta(days=3)
+        elif now.weekday() == 5:
+            target_date = target_date + timedelta(days=2)
+        elif now.weekday() == 6:
+            target_date = target_date + timedelta(days=1)
+        else:
+            target_date = target_date + timedelta(days=1)
+
+    return target_date.isoformat()
+
+
 def user_is_away(user_id: str) -> bool:
-    today = local_now().date().isoformat()
+    target_date = parking_date()
 
     with closing(get_db()) as conn:
         row = conn.execute(
@@ -358,7 +375,7 @@ def user_is_away(user_id: str) -> bool:
     if row is None:
         return False
 
-    return row["start_date"] <= today <= row["end_date"]
+    return row["start_date"] <= target_date <= row["end_date"]
 
 
 def set_user_away(user_id: str, start_date: str, end_date: str) -> None:
