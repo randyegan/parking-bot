@@ -538,7 +538,22 @@ def available_spots_for_user(user_id: str) -> List[SpotRecord]:
 
 def has_any_available_spot_for_user(user_id: str) -> bool:
     return len(available_spots_for_user(user_id)) > 0
+    
+def away_text_for_user(user_id: str) -> Optional[str]:
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT start_date, end_date
+            FROM management_away
+            WHERE slack_user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
 
+    if row is None:
+        return None
+
+    return f"Away dates set: {row['start_date']} to {row['end_date']}"
 
 def parking_home_blocks(user_id: str) -> list:
     booked_spot = get_user_booked_spot(user_id)
@@ -591,6 +606,18 @@ def parking_home_blocks(user_id: str) -> list:
         },
         {"type": "divider"},
     ]
+
+    if user_id in MANAGEMENT_DEFAULTS:
+        away_text = away_text_for_user(user_id)
+
+        if away_text:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f":calendar: {away_text}"},
+                }
+            )
+            blocks.append({"type": "divider"})
 
     for spot in get_all_spots():
         blocks.append(
