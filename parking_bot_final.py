@@ -970,9 +970,12 @@ def away_dates_submit_view(ack, body, view):
     management_spot = MANAGEMENT_DEFAULTS[user_id]
 
     if user_is_away(user_id):
-        set_spot_state(management_spot, "open")
-    else:
-        set_spot_state(management_spot, "reserved", reserved_for_user_id=user_id)
+        current_spot = get_spot(management_spot)
+
+        if current_spot.state == "reserved" and current_spot.reserved_for_user_id != user_id:
+            pass
+        else:
+            set_spot_state(management_spot, "open")
 
     label = DISPLAY_SPOT_NAMES.get(management_spot, management_spot)
 
