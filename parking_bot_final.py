@@ -111,6 +111,23 @@ def booking_day_text() -> str:
     return "tomorrow"
 
 
+def parking_date() -> str:
+    now = local_now()
+    target_date = now.date()
+
+    if now.hour >= 17:
+        if now.weekday() == 4:
+            target_date = target_date + timedelta(days=3)
+        elif now.weekday() == 5:
+            target_date = target_date + timedelta(days=2)
+        elif now.weekday() == 6:
+            target_date = target_date + timedelta(days=1)
+        else:
+            target_date = target_date + timedelta(days=1)
+
+    return target_date.isoformat()
+
+
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
@@ -172,7 +189,6 @@ def init_db() -> None:
 
             if row is None:
                 state, reserved_for_user_id, held_for_user_id, held_for_group = defaults[spot_id]
-
                 cur.execute(
                     """
                     INSERT INTO reservations (
@@ -342,23 +358,6 @@ def toggle_notifications_for_user(user_id: str) -> bool:
     return bool(new_value)
 
 
-def parking_date() -> str:
-    now = local_now()
-    target_date = now.date()
-
-    if now.hour >= 17:
-        if now.weekday() == 4:
-            target_date = target_date + timedelta(days=3)
-        elif now.weekday() == 5:
-            target_date = target_date + timedelta(days=2)
-        elif now.weekday() == 6:
-            target_date = target_date + timedelta(days=1)
-        else:
-            target_date = target_date + timedelta(days=1)
-
-    return target_date.isoformat()
-
-
 def user_is_away(user_id: str) -> bool:
     target_date = parking_date()
 
@@ -401,6 +400,20 @@ def clear_user_away(user_id: str) -> None:
             WHERE slack_user_id = ?
             """,
             (user_id,),
+        )
+        conn.commit()
+
+
+def clear_expired_away_dates() -> None:
+    today = local_now().date().isoformat()
+
+    with closing(get_db()) as conn:
+        conn.execute(
+            """
+            DELETE FROM management_away
+            WHERE end_date < ?
+            """,
+            (today,),
         )
         conn.commit()
 
@@ -538,8 +551,11 @@ def available_spots_for_user(user_id: str) -> List[SpotRecord]:
 
 def has_any_available_spot_for_user(user_id: str) -> bool:
     return len(available_spots_for_user(user_id)) > 0
-    
+
+
 def away_text_for_user(user_id: str) -> Optional[str]:
+    clear_expired_away_dates()
+
     with closing(get_db()) as conn:
         row = conn.execute(
             """
@@ -554,6 +570,7 @@ def away_text_for_user(user_id: str) -> Optional[str]:
         return None
 
     return f"Away dates set: {row['start_date']} to {row['end_date']}"
+
 
 def parking_home_blocks(user_id: str) -> list:
     booked_spot = get_user_booked_spot(user_id)
@@ -770,11 +787,7 @@ def release_for_user(user_id: str) -> str:
     booked_spot = get_user_booked_spot(user_id)
 
     if booked_spot:
-        if booked_spot in [M1, M2] and user_id in MANAGEMENT_DEFAULTS:
-            set_spot_state(booked_spot, "open")
-        else:
-            set_spot_state(booked_spot, "open")
-
+        set_spot_state(booked_spot, "open")
         label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
         return f"Spot {label} is now open."
 
@@ -967,6 +980,7 @@ def refresh_home_action(ack, body):
     ack()
 
     user_id = body["user"]["id"]
+    clear_expired_away_dates()
     publish_home(user_id)
     update_parking_board()
 
@@ -1014,6 +1028,7 @@ def away_dates_submit_view(ack, body, view):
     publish_home_all_users()
     update_parking_board()
 
+
 @slack_app.action("toggle_notifications")
 def toggle_notifications_action(ack, body):
     ack()
@@ -1036,6 +1051,7 @@ def toggle_notifications_action(ack, body):
 # Scheduler
 # -----------------------------
 def scheduled_5pm_reset() -> None:
+    clear_expired_away_dates()
     reset_for_5pm()
     publish_home_all_users()
     update_parking_board()
@@ -1055,6 +1071,7 @@ async def lifespan(app: FastAPI):
         os.makedirs(db_dir, exist_ok=True)
 
     init_db()
+    clear_expired_away_dates()
     update_parking_board()
 
     scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)
