@@ -160,14 +160,9 @@ def init_db() -> None:
             """
         )
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_prefs (
-                slack_user_id TEXT PRIMARY KEY,
-                notifications_enabled INTEGER NOT NULL DEFAULT 1
-            )
-            """
-        )
+        # Notification preferences were removed; discard the obsolete table
+        # when upgrading an existing database.
+        cur.execute("DROP TABLE IF EXISTS user_prefs")
 
         cur.execute(
             """
@@ -532,59 +527,6 @@ def get_user_booked_spot(user_id: str) -> Optional[str]:
     return row["spot_id"] if row else None
 
 
-def notifications_enabled(user_id: str) -> bool:
-    with closing(get_db()) as conn:
-        row = conn.execute(
-            """
-            SELECT notifications_enabled
-            FROM user_prefs
-            WHERE slack_user_id = ?
-            """,
-            (user_id,),
-        ).fetchone()
-
-    if row is None:
-        return True
-
-    return bool(row["notifications_enabled"])
-
-
-def toggle_notifications_for_user(user_id: str) -> bool:
-    with closing(get_db()) as conn:
-        row = conn.execute(
-            """
-            SELECT notifications_enabled
-            FROM user_prefs
-            WHERE slack_user_id = ?
-            """,
-            (user_id,),
-        ).fetchone()
-
-        if row is None:
-            new_value = 0
-            conn.execute(
-                """
-                INSERT INTO user_prefs (slack_user_id, notifications_enabled)
-                VALUES (?, ?)
-                """,
-                (user_id, new_value),
-            )
-        else:
-            new_value = 0 if row["notifications_enabled"] else 1
-            conn.execute(
-                """
-                UPDATE user_prefs
-                SET notifications_enabled = ?
-                WHERE slack_user_id = ?
-                """,
-                (new_value, user_id),
-            )
-
-        conn.commit()
-
-    return bool(new_value)
-
-
 def user_is_away(user_id: str) -> bool:
     target_date = parking_date()
 
@@ -645,10 +587,7 @@ def clear_expired_away_dates() -> None:
         conn.commit()
 
 
-def maybe_dm(user_id: str, text: str) -> None:
-    if not notifications_enabled(user_id):
-        return
-
+def send_dm(user_id: str, text: str) -> None:
     try:
         slack_app.client.chat_postMessage(channel=user_id, text=text)
     except Exception:
@@ -845,8 +784,6 @@ def parking_home_blocks(user_id: str) -> list:
         booking_text = f"Sorry, all spots are reserved for {booking_day_text()}."
 
     refreshed = local_now().strftime("%-I:%M:%S %p")
-    notif_text = "Notifications: On" if notifications_enabled(user_id) else "Notifications: Off"
-
     reserve_buttons = [
         {
             "type": "button",
@@ -870,7 +807,6 @@ def parking_home_blocks(user_id: str) -> list:
         {
             "type": "context",
             "elements": [
-                {"type": "mrkdwn", "text": notif_text},
                 {"type": "mrkdwn", "text": f"Last refreshed: {refreshed}"},
             ],
         },
@@ -940,19 +876,6 @@ def parking_home_blocks(user_id: str) -> list:
             ]
         )
 
-    parking_actions.append(
-        {
-            "type": "button",
-            "text": {
-                "type": "plain_text",
-                "text": "Turn off notifications"
-                if notifications_enabled(user_id)
-                else "Turn on notifications",
-            },
-            "action_id": "toggle_notifications",
-        }
-    )
-
     blocks.append({"type": "divider"})
 
     blocks.append(
@@ -1003,12 +926,6 @@ def all_known_user_ids() -> List[str]:
         for r in rows:
             if r["reserved_for_user_id"]:
                 users.add(r["reserved_for_user_id"])
-
-        rows = conn.execute("SELECT slack_user_id FROM user_prefs").fetchall()
-
-        for r in rows:
-            if r["slack_user_id"]:
-                users.add(r["slack_user_id"])
 
     return list(users)
 
@@ -1112,21 +1029,21 @@ def parking_command(ack, body):
     text = body.get("text", "").strip().lower()
 
     if text == "whoami":
-        maybe_dm(user_id, f"Your Slack user ID is: {user_id}")
+        send_dm(user_id, f"Your Slack user ID is: {user_id}")
         return
 
     if text in ["reserve", "book"]:
         message = reserve_for_user(user_id)
         publish_home_all_users()
         update_parking_board()
-        maybe_dm(user_id, f":parking: {message}")
+        send_dm(user_id, f":parking: {message}")
         return
 
     if text in ["release", "cancel"]:
         message = release_for_user(user_id)
         publish_home_all_users()
         update_parking_board()
-        maybe_dm(user_id, f":parking: {message}")
+        send_dm(user_id, f":parking: {message}")
         return
 
     if text in ["refresh", "status", ""]:
@@ -1134,7 +1051,7 @@ def parking_command(ack, body):
         update_parking_board()
         return
 
-    maybe_dm(
+    send_dm(
         user_id,
         ":parking: Try `/parking reserve`, `/parking release`, `/parking refresh`, or `/parking whoami`."
     )
@@ -1149,7 +1066,7 @@ def reserve_today_action(ack, body):
 
     publish_home_all_users()
     update_parking_board()
-    maybe_dm(user_id, f":parking: {message}")
+    send_dm(user_id, f":parking: {message}")
 
 
 @slack_app.action("reserve_spot_select")
@@ -1163,7 +1080,7 @@ def reserve_spot_select_action(ack, body):
 
     publish_home_all_users()
     update_parking_board()
-    maybe_dm(user_id, f":parking: {message}")
+    send_dm(user_id, f":parking: {message}")
 
 
 @slack_app.action(re.compile(r"^reserve_spot_(M1|M2|P1|P2|P3)$"))
@@ -1176,7 +1093,7 @@ def reserve_spot_button_action(ack, body):
 
     publish_home_all_users()
     update_parking_board()
-    maybe_dm(user_id, f":parking: {message}")
+    send_dm(user_id, f":parking: {message}")
 
 
 @slack_app.action("release_today")
@@ -1188,7 +1105,7 @@ def release_today_action(ack, body):
 
     publish_home_all_users()
     update_parking_board()
-    maybe_dm(user_id, f":parking: {message}")
+    send_dm(user_id, f":parking: {message}")
 
 
 @slack_app.action("open_away_modal")
@@ -1198,7 +1115,7 @@ def open_away_modal_action(ack, body):
     user_id = body["user"]["id"]
 
     if user_id not in MANAGEMENT_DEFAULTS:
-        maybe_dm(user_id, ":parking: Only Randy and Kylie can set away dates.")
+        send_dm(user_id, ":parking: Only Randy and Kylie can set away dates.")
         return
 
     slack_app.client.views_open(
@@ -1240,7 +1157,7 @@ def clear_away_dates_action(ack, body):
     user_id = body["user"]["id"]
 
     if user_id not in MANAGEMENT_DEFAULTS:
-        maybe_dm(user_id, ":parking: Only Randy and Kylie can use this button.")
+        send_dm(user_id, ":parking: Only Randy and Kylie can use this button.")
         return
 
     clear_user_away(user_id)
@@ -1250,7 +1167,7 @@ def clear_away_dates_action(ack, body):
 
     label = DISPLAY_SPOT_NAMES.get(management_spot, management_spot)
 
-    maybe_dm(
+    send_dm(
         user_id,
         f":parking: Welcome back. Spot {label} is booked for you again."
     )
@@ -1275,7 +1192,7 @@ def manage_t1_action(ack, body):
 
     user_id = body["user"]["id"]
     if user_id not in MANAGEMENT_DEFAULTS:
-        maybe_dm(user_id, ":parking: Only Randy and Kylie can manage T1.")
+        send_dm(user_id, ":parking: Only Randy and Kylie can manage T1.")
         return
 
     current = get_spot(T1)
@@ -1348,7 +1265,7 @@ def manage_t1_submit_view(ack, body, view):
     set_t1_control(status, message)
     publish_home_all_users()
     update_parking_board()
-    maybe_dm(user_id, f":parking: T1 is now {status}.")
+    send_dm(user_id, f":parking: T1 is now {status}.")
 
 
 @slack_app.view("away_dates_submit")
@@ -1386,31 +1303,13 @@ def away_dates_submit_view(ack, body, view):
 
     label = DISPLAY_SPOT_NAMES.get(management_spot, management_spot)
 
-    maybe_dm(
+    send_dm(
         user_id,
         f":parking: Spot {label} will be open from {start_date} to {end_date}."
     )
 
     publish_home_all_users()
     update_parking_board()
-
-
-@slack_app.action("toggle_notifications")
-def toggle_notifications_action(ack, body):
-    ack()
-
-    user_id = body["user"]["id"]
-    now_enabled = toggle_notifications_for_user(user_id)
-
-    publish_home(user_id)
-
-    try:
-        slack_app.client.chat_postMessage(
-            channel=user_id,
-            text="Notifications turned on." if now_enabled else "Notifications turned off.",
-        )
-    except Exception:
-        pass
 
 
 # -----------------------------

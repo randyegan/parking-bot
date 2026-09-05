@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 
@@ -14,7 +14,7 @@ os.environ.setdefault("SLACK_SIGNING_SECRET", "test-secret")
 
 class FakeSlackApp:
     def __init__(self, *args, **kwargs):
-        self.client = object()
+        self.client = Mock()
 
     @staticmethod
     def _decorator(*args, **kwargs):
@@ -50,6 +50,25 @@ class ReservationDaysTests(unittest.TestCase):
 
         self.assertIn("reservations", tables)
         self.assertIn("reservation_days", tables)
+        self.assertNotIn("user_prefs", tables)
+
+    def test_init_removes_existing_notification_preferences(self):
+        with sqlite3.connect(parking.DATABASE_PATH) as conn:
+            conn.execute(
+                "CREATE TABLE user_prefs "
+                "(slack_user_id TEXT PRIMARY KEY, notifications_enabled INTEGER)"
+            )
+            conn.execute("INSERT INTO user_prefs VALUES ('U123', 0)")
+
+        parking.init_db()
+
+        with sqlite3.connect(parking.DATABASE_PATH) as conn:
+            table = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'user_prefs'"
+            ).fetchone()
+
+        self.assertIsNone(table)
 
     def test_new_table_does_not_change_legacy_state(self):
         original = parking.get_spot(parking.M1)
@@ -185,6 +204,53 @@ class ReservationDaysTests(unittest.TestCase):
             e["action_id"] for e in elements if e.get("action_id", "").startswith("reserve_spot_")
         ]
         self.assertEqual(len(action_ids), len(set(action_ids)))
+
+    def test_home_has_no_notification_controls_or_status(self):
+        blocks = parking.parking_home_blocks("U-STAFF")
+        self.assertNotIn("Notifications:", str(blocks))
+        self.assertNotIn("toggle_notifications", str(blocks))
+        self.assertNotIn("Turn on notifications", str(blocks))
+        self.assertNotIn("Turn off notifications", str(blocks))
+
+    def test_reserve_and_release_workflow(self):
+        user_id = "U-STAFF"
+        message = parking.reserve_for_user(user_id, parking.P1)
+        self.assertIn("You have Spot", message)
+        self.assertEqual(parking.P1, parking.get_user_booked_spot(user_id))
+
+        message = parking.release_for_user(user_id)
+        self.assertIn("is now open", message)
+        self.assertIsNone(parking.get_user_booked_spot(user_id))
+
+    def test_away_dates_affect_home_and_management_spot(self):
+        today = date.today().isoformat()
+        parking.set_user_away(parking.RANDY_ID, today, today)
+
+        with patch.object(parking, "parking_date", return_value=today):
+            self.assertTrue(parking.user_is_away(parking.RANDY_ID))
+            blocks = parking.parking_home_blocks(parking.RANDY_ID)
+
+        self.assertIn("Away dates set", str(blocks))
+
+    def test_home_publish_and_live_board_update(self):
+        parking.slack_app.client.reset_mock()
+        parking.publish_home("U-STAFF")
+        parking.slack_app.client.views_publish.assert_called_once()
+
+        parking.slack_app.client.reset_mock()
+        with patch.object(parking, "PARKING_CHANNEL_ID", "C-PARKING"), patch.object(
+            parking, "load_board_ts", return_value="123.456"
+        ):
+            parking.update_parking_board()
+
+        parking.slack_app.client.chat_update.assert_called_once()
+
+    def test_send_dm_always_attempts_delivery(self):
+        parking.slack_app.client.reset_mock()
+        parking.send_dm("U123", "Parking updated")
+        parking.slack_app.client.chat_postMessage.assert_called_once_with(
+            channel="U123", text="Parking updated"
+        )
 
     def test_status_uses_green_circle_and_plain_names(self):
         open_status = parking.display_status_for_spot(parking.get_spot(parking.P1))
