@@ -5,7 +5,7 @@ import json
 import sqlite3
 from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional, List
 from zoneinfo import ZoneInfo
 
@@ -92,6 +92,17 @@ class SpotRecord:
     held_for_group: Optional[str]
 
 
+@dataclass
+class ReservationDayRecord:
+    reservation_date: str
+    spot_id: str
+    status: str
+    user_id: Optional[str]
+    source: str
+    created_at: str
+    updated_at: str
+
+
 # -----------------------------
 # Helpers
 # -----------------------------
@@ -170,6 +181,32 @@ def init_db() -> None:
             """
         )
 
+        # Parking v2 stores dated reservations alongside the current-state table.
+        # Existing production reads and writes continue to use `reservations`.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reservation_days (
+                reservation_date TEXT NOT NULL,
+                spot_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('open', 'reserved', 'held_user', 'held_group')
+                ),
+                user_id TEXT,
+                source TEXT NOT NULL DEFAULT 'manual',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (reservation_date, spot_id)
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_reservation_days_user_date
+            ON reservation_days (user_id, reservation_date)
+            """
+        )
+
         now = local_now().isoformat()
 
         defaults = {
@@ -206,6 +243,114 @@ def init_db() -> None:
                     ),
                 )
 
+        conn.commit()
+
+
+def normalize_reservation_date(value: date | str) -> str:
+    if isinstance(value, date):
+        return value.isoformat()
+
+    return date.fromisoformat(value).isoformat()
+
+
+def get_reservation_day(
+    reservation_date: date | str,
+    spot_id: str,
+) -> Optional[ReservationDayRecord]:
+    day = normalize_reservation_date(reservation_date)
+
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT reservation_date, spot_id, status, user_id, source,
+                   created_at, updated_at
+            FROM reservation_days
+            WHERE reservation_date = ? AND spot_id = ?
+            """,
+            (day, spot_id),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return ReservationDayRecord(
+        reservation_date=row["reservation_date"],
+        spot_id=row["spot_id"],
+        status=row["status"],
+        user_id=row["user_id"],
+        source=row["source"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def get_reservation_days(reservation_date: date | str) -> List[ReservationDayRecord]:
+    day = normalize_reservation_date(reservation_date)
+
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            """
+            SELECT reservation_date, spot_id, status, user_id, source,
+                   created_at, updated_at
+            FROM reservation_days
+            WHERE reservation_date = ?
+            ORDER BY CASE spot_id
+                WHEN 'M1' THEN 1 WHEN 'M2' THEN 2 WHEN 'P1' THEN 3
+                WHEN 'P2' THEN 4 WHEN 'P3' THEN 5 WHEN 'T1' THEN 6
+                ELSE 99
+            END
+            """,
+            (day,),
+        ).fetchall()
+
+    return [
+        ReservationDayRecord(
+            reservation_date=row["reservation_date"],
+            spot_id=row["spot_id"],
+            status=row["status"],
+            user_id=row["user_id"],
+            source=row["source"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
+
+
+def set_reservation_day(
+    reservation_date: date | str,
+    spot_id: str,
+    status: str,
+    user_id: Optional[str] = None,
+    source: str = "manual",
+) -> None:
+    day = normalize_reservation_date(reservation_date)
+    now = local_now().isoformat()
+
+    if spot_id not in SPOT_ORDER:
+        raise ValueError(f"Unknown parking spot: {spot_id}")
+
+    if status == "reserved" and not user_id:
+        raise ValueError("Reserved days require a user_id")
+
+    if status != "reserved" and user_id:
+        raise ValueError("Only reserved days may have a user_id")
+
+    with closing(get_db()) as conn:
+        conn.execute(
+            """
+            INSERT INTO reservation_days (
+                reservation_date, spot_id, status, user_id, source,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(reservation_date, spot_id)
+            DO UPDATE SET status = excluded.status,
+                          user_id = excluded.user_id,
+                          source = excluded.source,
+                          updated_at = excluded.updated_at
+            """,
+            (day, spot_id, status, user_id, source, now, now),
+        )
         conn.commit()
 
 
