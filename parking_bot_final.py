@@ -815,24 +815,16 @@ def parking_home_blocks(user_id: str) -> list:
     refreshed = local_now().strftime("%-I:%M:%S %p")
     notif_text = "Notifications: On" if notifications_enabled(user_id) else "Notifications: Off"
 
-    available_options = [
+    reserve_buttons = [
         {
-            "text": {
-                "type": "plain_text",
-                "text": DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id),
-            },
+            "type": "button",
+            "text": {"type": "plain_text", "text": DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)},
+            "action_id": "reserve_spot_button",
             "value": spot.spot_id,
+            "style": "primary",
         }
         for spot in available_spots_for_user(user_id)
     ]
-
-    if not available_options:
-        available_options = [
-            {
-                "text": {"type": "plain_text", "text": "No spots available"},
-                "value": "none",
-            }
-        ]
 
     blocks = [
         {
@@ -880,13 +872,7 @@ def parking_home_blocks(user_id: str) -> list:
             }
         )
 
-    action_elements = [
-        {
-            "type": "static_select",
-            "placeholder": {"type": "plain_text", "text": "Reserve spot"},
-            "action_id": "reserve_spot_select",
-            "options": available_options,
-        },
+    parking_actions = [
         {
             "type": "button",
             "text": {"type": "plain_text", "text": "Release"},
@@ -899,8 +885,9 @@ def parking_home_blocks(user_id: str) -> list:
         },
     ]
 
+    management_actions = []
     if user_id in MANAGEMENT_DEFAULTS:
-        action_elements.extend(
+        management_actions.extend(
             [
                 {
                     "type": "button",
@@ -920,7 +907,7 @@ def parking_home_blocks(user_id: str) -> list:
             ]
         )
 
-    action_elements.append(
+    parking_actions.append(
         {
             "type": "button",
             "text": {
@@ -933,19 +920,31 @@ def parking_home_blocks(user_id: str) -> list:
         }
     )
 
-    # Slack compresses long action rows behind a “2+” menu. Use short rows so
-    # every control stays visible, with management-only controls kept separate.
-    primary_actions = action_elements[:3]
-    management_actions = action_elements[3:-1] if user_id in MANAGEMENT_DEFAULTS else []
-    notification_action = action_elements[-1:]
-
     blocks.append({"type": "divider"})
-    blocks.append({"type": "actions", "elements": primary_actions})
+
+    blocks.append(
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*Reserve a spot*"}}
+    )
+    if reserve_buttons:
+        for start in range(0, len(reserve_buttons), 3):
+            blocks.append(
+                {"type": "actions", "elements": reserve_buttons[start:start + 3]}
+            )
+    else:
+        blocks.append(
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": "No spots available."}]}
+        )
+
+    blocks.append(
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*Parking controls*"}}
+    )
+    blocks.append({"type": "actions", "elements": parking_actions})
 
     if management_actions:
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": "*Management*"}}
+        )
         blocks.append({"type": "actions", "elements": management_actions})
-
-    blocks.append({"type": "actions", "elements": notification_action})
 
     return blocks
 
@@ -1128,6 +1127,19 @@ def reserve_spot_select_action(ack, body):
     user_id = body["user"]["id"]
     selected_spot = body["actions"][0]["selected_option"]["value"]
 
+    message = reserve_for_user(user_id, selected_spot)
+
+    publish_home_all_users()
+    update_parking_board()
+    maybe_dm(user_id, f":parking: {message}")
+
+
+@slack_app.action("reserve_spot_button")
+def reserve_spot_button_action(ack, body):
+    ack()
+
+    user_id = body["user"]["id"]
+    selected_spot = body["actions"][0]["value"]
     message = reserve_for_user(user_id, selected_spot)
 
     publish_home_all_users()

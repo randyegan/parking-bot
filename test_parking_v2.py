@@ -158,6 +158,17 @@ class ReservationDaysTests(unittest.TestCase):
         self.assertTrue(action_blocks)
         self.assertTrue(all(len(block["elements"]) <= 3 for block in action_blocks))
 
+    def test_reservations_use_hot_buttons_not_dropdown(self):
+        blocks = parking.parking_home_blocks("U-STAFF")
+        elements = [
+            element
+            for block in blocks
+            for element in block.get("elements", [])
+        ]
+
+        self.assertTrue(any(e.get("action_id") == "reserve_spot_button" for e in elements))
+        self.assertFalse(any(e.get("type") == "static_select" for e in elements))
+
 
 if __name__ == "__main__":
     unittest.main()
