@@ -701,7 +701,7 @@ def load_board_ts() -> Optional[str]:
 
 def board_line_for_spot(spot: SpotRecord) -> str:
     if spot.state == "open":
-        status = "🟩 Open"
+        status = "🟢 Open"
     elif spot.state == "held_user":
         name = DISPLAY_NAMES.get(spot.held_for_user_id, f"<@{spot.held_for_user_id}>")
         status = f"🟡 Held for {name}"
@@ -765,7 +765,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
 
 def display_status_for_spot(spot: SpotRecord) -> str:
     if spot.state == "open":
-        status = "🟩 Open"
+        status = "🟢 Open"
 
     elif spot.state == "held_user":
         name = DISPLAY_NAMES.get(spot.held_for_user_id, f"<@{spot.held_for_user_id}>")
