@@ -681,8 +681,8 @@ def display_name_for_user(user_id: Optional[str]) -> str:
 
 
 def neutral_slack_name(name: str) -> str:
-    """Return the person's full name without Slack mention markup."""
-    return name
+    """Return the person's first name without Slack mention markup."""
+    return name.strip().split()[0] if name.strip() else "Unknown"
 
 
 # -----------------------------
