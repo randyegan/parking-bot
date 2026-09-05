@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import date
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 
 os.environ.setdefault("SLACK_BOT_TOKEN", "xoxb-test")
@@ -95,6 +96,31 @@ class ReservationDaysTests(unittest.TestCase):
             parking.set_reservation_day(
                 "2026-09-08", parking.P1, "open", user_id="U123"
             )
+
+    def test_friday_reset_opens_management_spots(self):
+        friday = parking.datetime(2026, 9, 4, 17, 0, tzinfo=ZoneInfo("America/Vancouver"))
+
+        with patch.object(parking, "local_now", return_value=friday):
+            parking.reset_for_5pm()
+
+        self.assertEqual("open", parking.get_spot(parking.M1).state)
+        self.assertEqual("open", parking.get_spot(parking.M2).state)
+
+    def test_weekend_migration_opens_defaults_only_once(self):
+        saturday = parking.datetime(2026, 9, 5, 9, 0, tzinfo=ZoneInfo("America/Vancouver"))
+
+        with patch.object(parking, "local_now", return_value=saturday):
+            parking.apply_v2_weekend_migration()
+
+        self.assertEqual("open", parking.get_spot(parking.M1).state)
+        self.assertEqual("open", parking.get_spot(parking.M2).state)
+
+        parking.set_spot_state(parking.M1, "reserved", reserved_for_user_id="U-WEEKEND")
+
+        with patch.object(parking, "local_now", return_value=saturday):
+            parking.apply_v2_weekend_migration()
+
+        self.assertEqual("U-WEEKEND", parking.get_spot(parking.M1).reserved_for_user_id)
 
 
 if __name__ == "__main__":

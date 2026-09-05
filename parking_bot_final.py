@@ -202,6 +202,15 @@ def init_db() -> None:
 
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+
+        cur.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_reservation_days_user_date
             ON reservation_days (user_id, reservation_date)
             """
@@ -243,6 +252,39 @@ def init_db() -> None:
                     ),
                 )
 
+        conn.commit()
+
+
+def apply_v2_weekend_migration() -> None:
+    """Open legacy management defaults once when v2 first runs on a weekend."""
+    if local_now().weekday() not in (5, 6):
+        return
+
+    with closing(get_db()) as conn:
+        applied = conn.execute(
+            "SELECT value FROM app_meta WHERE key = 'v2_weekend_migration'"
+        ).fetchone()
+
+        if applied:
+            return
+
+        now = local_now().isoformat()
+        conn.execute(
+            """
+            UPDATE reservations
+            SET state = 'open', reserved_for_user_id = NULL,
+                held_for_user_id = NULL, held_for_group = NULL, updated_at = ?
+            WHERE (spot_id = ? AND state = 'reserved' AND reserved_for_user_id = ?)
+               OR (spot_id = ? AND state = 'reserved' AND reserved_for_user_id = ?)
+            """,
+            (now, M1, RANDY_ID, M2, KYLIE_ID),
+        )
+        conn.execute(
+            """
+            INSERT INTO app_meta (key, value) VALUES ('v2_weekend_migration', ?)
+            """,
+            (now,),
+        )
         conn.commit()
 
 
@@ -953,6 +995,17 @@ def release_for_user(user_id: str) -> str:
 
 
 def reset_for_5pm() -> None:
+    # Friday evening prepares the weekend. Management defaults resume at the
+    # Monday reset, which prepares Tuesday under the app's after-5 PM model.
+    if local_now().weekday() == 4:
+        set_spot_state(M1, "open")
+        set_spot_state(M2, "open")
+        set_spot_state(P1, "open")
+        set_spot_state(P2, "open")
+        set_spot_state(P3, "open")
+        set_spot_state(T1, "held_group", held_for_group=CINOVA_GROUP_KEY)
+        return
+
     if user_is_away(RANDY_ID):
         set_spot_state(M1, "open")
     else:
@@ -1216,6 +1269,7 @@ async def lifespan(app: FastAPI):
         os.makedirs(db_dir, exist_ok=True)
 
     init_db()
+    apply_v2_weekend_migration()
     clear_expired_away_dates()
     update_parking_board()
 
