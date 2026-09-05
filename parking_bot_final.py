@@ -35,8 +35,6 @@ if not SLACK_BOT_TOKEN or not SLACK_SIGNING_SECRET:
 # -----------------------------
 RANDY_ID = "U1HMCS77V"
 KYLIE_ID = "UR0JZ0GR0"
-MIKE_ID = "U03EH8HM4G0"
-PETER_ID = "U03DVSASKPE"
 
 M1 = "M1"
 M2 = "M2"
@@ -59,8 +57,6 @@ DISPLAY_SPOT_NAMES = {
 DISPLAY_NAMES = {
     RANDY_ID: "@Randy",
     KYLIE_ID: "@Kylie",
-    MIKE_ID: "@Mike",
-    PETER_ID: "@Peter",
 }
 
 MANAGEMENT_DEFAULTS = {
@@ -68,7 +64,6 @@ MANAGEMENT_DEFAULTS = {
     KYLIE_ID: M2,
 }
 
-CINOVA_USER_IDS = {MIKE_ID, PETER_ID}
 CINOVA_GROUP_KEY = "cinova"
 
 
@@ -694,6 +689,11 @@ def update_parking_board() -> None:
 # Home tab
 # -----------------------------
 def display_line_for_spot(spot: SpotRecord) -> str:
+    label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
+    return f"{label:<7} {display_status_for_spot(spot)}"
+
+
+def display_status_for_spot(spot: SpotRecord) -> str:
     if spot.state == "open":
         status = "🟢 Open"
 
@@ -714,13 +714,12 @@ def display_line_for_spot(spot: SpotRecord) -> str:
     else:
         status = spot.state
 
-    label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
-    return f"{label:<7} {status}"
+    return status
 
 
 def spot_available_to_user(spot: SpotRecord, user_id: str) -> bool:
     if spot.spot_id == T1:
-        return user_id in CINOVA_USER_IDS and spot.state != "reserved"
+        return False
 
     if spot.state == "open":
         return True
@@ -823,17 +822,19 @@ def parking_home_blocks(user_id: str) -> list:
             )
             blocks.append({"type": "divider"})
 
-    # Keep all rows in one fixed-width block so Slack draws every status dot in
-    # the same vertical column.
-    parking_rows = "\n".join(
-        display_line_for_spot(spot) for spot in get_all_spots()
-    )
-    blocks.append(
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"```{parking_rows}```"},
-        }
-    )
+    # Two consistent fields keep every dot in one vertical column while using
+    # Slack's normal text size.
+    for spot in get_all_spots():
+        label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
+        blocks.append(
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*{label}*"},
+                    {"type": "mrkdwn", "text": display_status_for_spot(spot)},
+                ],
+            }
+        )
 
     action_elements = [
         {
@@ -904,7 +905,7 @@ def publish_home(user_id: str) -> None:
 
 
 def all_known_user_ids() -> List[str]:
-    users = {RANDY_ID, KYLIE_ID, MIKE_ID, PETER_ID}
+    users = {RANDY_ID, KYLIE_ID}
 
     with closing(get_db()) as conn:
         rows = conn.execute(
@@ -946,9 +947,6 @@ def reserve_for_user(user_id: str, requested_spot_id: Optional[str] = None) -> s
         label = DISPLAY_SPOT_NAMES.get(existing, existing)
         return f"You already have Spot {label} {booking_day_text()}."
 
-    if user_id in CINOVA_USER_IDS and not requested_spot_id:
-        requested_spot_id = T1
-
     available = available_spots_for_user(user_id)
 
     if requested_spot_id:
@@ -981,19 +979,6 @@ def release_for_user(user_id: str) -> str:
         set_spot_state(booked_spot, "open")
         label = DISPLAY_SPOT_NAMES.get(booked_spot, booked_spot)
         return f"Spot {label} is now open."
-
-    if user_id in CINOVA_USER_IDS:
-        t1 = get_spot(T1)
-
-        if t1.state == "held_group" and t1.held_for_group == CINOVA_GROUP_KEY:
-            set_spot_state(T1, "open")
-            label = DISPLAY_SPOT_NAMES.get(T1, T1)
-            return f"Spot {label} is now open."
-
-        if t1.state == "reserved" and t1.reserved_for_user_id in CINOVA_USER_IDS:
-            set_spot_state(T1, "open")
-            label = DISPLAY_SPOT_NAMES.get(T1, T1)
-            return f"Spot {label} is now open."
 
     return "You do not have a booking to release."
 
