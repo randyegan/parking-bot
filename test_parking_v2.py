@@ -122,6 +122,21 @@ class ReservationDaysTests(unittest.TestCase):
 
         self.assertEqual("U-WEEKEND", parking.get_spot(parking.M1).reserved_for_user_id)
 
+    def test_t1_control_never_assigns_a_user(self):
+        parking.set_t1_control("held", "Held for production crew")
+        t1 = parking.get_spot(parking.T1)
+
+        self.assertEqual("held_group", t1.state)
+        self.assertIsNone(t1.reserved_for_user_id)
+        self.assertEqual("Held for production crew", parking.t1_held_message())
+
+        parking.set_t1_control("open")
+        self.assertEqual("open", parking.get_spot(parking.T1).state)
+
+    def test_t1_is_not_reservable(self):
+        parking.set_t1_control("open")
+        self.assertFalse(parking.spot_available_to_user(parking.get_spot(parking.T1), parking.RANDY_ID))
+
 
 if __name__ == "__main__":
     unittest.main()

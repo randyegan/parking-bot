@@ -65,6 +65,7 @@ MANAGEMENT_DEFAULTS = {
 }
 
 CINOVA_GROUP_KEY = "cinova"
+DEFAULT_T1_HELD_MESSAGE = "Held for Cinova users"
 
 
 # -----------------------------
@@ -281,6 +282,48 @@ def apply_v2_weekend_migration() -> None:
             (now,),
         )
         conn.commit()
+
+
+def get_app_meta(key: str, default: str) -> str:
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            "SELECT value FROM app_meta WHERE key = ?",
+            (key,),
+        ).fetchone()
+
+    return row["value"] if row else default
+
+
+def set_app_meta(key: str, value: str) -> None:
+    with closing(get_db()) as conn:
+        conn.execute(
+            """
+            INSERT INTO app_meta (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+        conn.commit()
+
+
+def t1_held_message() -> str:
+    return get_app_meta("t1_held_message", DEFAULT_T1_HELD_MESSAGE)
+
+
+def set_t1_control(status: str, message: Optional[str] = None) -> None:
+    if status == "open":
+        set_spot_state(T1, "open")
+        return
+
+    if status != "held":
+        raise ValueError("T1 status must be open or held")
+
+    cleaned_message = (message or "").strip()
+    if not cleaned_message:
+        raise ValueError("A held message is required")
+
+    set_app_meta("t1_held_message", cleaned_message[:150])
+    set_spot_state(T1, "held_group", held_for_group=CINOVA_GROUP_KEY)
 
 
 def normalize_reservation_date(value: date | str) -> str:
@@ -636,7 +679,7 @@ def board_line_for_spot(spot: SpotRecord) -> str:
         name = DISPLAY_NAMES.get(spot.held_for_user_id, f"<@{spot.held_for_user_id}>")
         status = f"🟡 Held for {name}"
     elif spot.state == "held_group":
-        status = "🟡 Held for Cinova users"
+        status = f"🟡 {t1_held_message()}" if spot.spot_id == T1 else "🟡 Held"
     elif spot.state == "reserved":
         name = DISPLAY_NAMES.get(spot.reserved_for_user_id, f"<@{spot.reserved_for_user_id}>")
         status = f"🔴 Booked by {name}"
@@ -703,7 +746,7 @@ def display_status_for_spot(spot: SpotRecord) -> str:
 
     elif spot.state == "held_group":
         if spot.held_for_group == CINOVA_GROUP_KEY:
-            status = "🟡 Held for Cinova users"
+            status = f"🟡 {t1_held_message()}"
         else:
             status = "🟡 Held"
 
@@ -867,6 +910,11 @@ def parking_home_blocks(user_id: str) -> list:
                     "type": "button",
                     "text": {"type": "plain_text", "text": "Back / Book My Spot"},
                     "action_id": "clear_away_dates",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Manage T1"},
+                    "action_id": "manage_t1",
                 },
             ]
         )
@@ -1170,6 +1218,88 @@ def refresh_home_action(ack, body):
     clear_expired_away_dates()
     publish_home(user_id)
     update_parking_board()
+
+
+@slack_app.action("manage_t1")
+def manage_t1_action(ack, body):
+    ack()
+
+    user_id = body["user"]["id"]
+    if user_id not in MANAGEMENT_DEFAULTS:
+        maybe_dm(user_id, ":parking: Only Randy and Kylie can manage T1.")
+        return
+
+    current = get_spot(T1)
+    initial_status = "open" if current.state == "open" else "held"
+
+    slack_app.client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "manage_t1_submit",
+            "title": {"type": "plain_text", "text": "Manage T1"},
+            "submit": {"type": "plain_text", "text": "Save"},
+            "close": {"type": "plain_text", "text": "Cancel"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "t1_status_block",
+                    "label": {"type": "plain_text", "text": "T1 status"},
+                    "element": {
+                        "type": "radio_buttons",
+                        "action_id": "t1_status",
+                        "initial_option": {
+                            "text": {"type": "plain_text", "text": "Open" if initial_status == "open" else "Held"},
+                            "value": initial_status,
+                        },
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "Held"}, "value": "held"},
+                            {"text": {"type": "plain_text", "text": "Open"}, "value": "open"},
+                        ],
+                    },
+                },
+                {
+                    "type": "input",
+                    "block_id": "t1_message_block",
+                    "optional": True,
+                    "label": {"type": "plain_text", "text": "Held message"},
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "t1_message",
+                        "initial_value": t1_held_message(),
+                        "max_length": 150,
+                    },
+                },
+            ],
+        },
+    )
+
+
+@slack_app.view("manage_t1_submit")
+def manage_t1_submit_view(ack, body, view):
+    user_id = body["user"]["id"]
+    if user_id not in MANAGEMENT_DEFAULTS:
+        ack()
+        return
+
+    values = view["state"]["values"]
+    status = values["t1_status_block"]["t1_status"]["selected_option"]["value"]
+    message = values["t1_message_block"]["t1_message"].get("value") or ""
+
+    if status == "held" and not message.strip():
+        ack(
+            {
+                "response_action": "errors",
+                "errors": {"t1_message_block": "Enter the message to display for T1."},
+            }
+        )
+        return
+
+    ack()
+    set_t1_control(status, message)
+    publish_home_all_users()
+    update_parking_board()
+    maybe_dm(user_id, f":parking: T1 is now {status}.")
 
 
 @slack_app.view("away_dates_submit")
