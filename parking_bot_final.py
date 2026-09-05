@@ -680,6 +680,14 @@ def display_name_for_user(user_id: Optional[str]) -> str:
     return name
 
 
+def neutral_slack_name(name: str) -> str:
+    """Keep Slack from automatically highlighting a matching profile name."""
+    if len(name) < 2:
+        return name
+
+    return f"{name[0]}\u200b{name[1:]}"
+
+
 # -----------------------------
 # Live board message
 # -----------------------------
@@ -708,7 +716,7 @@ def board_line_for_spot(spot: SpotRecord) -> str:
     elif spot.state == "held_group":
         status = f"🟡 {t1_held_message()}" if spot.spot_id == T1 else "🟡 Held"
     elif spot.state == "reserved":
-        name = display_name_for_user(spot.reserved_for_user_id)
+        name = neutral_slack_name(display_name_for_user(spot.reserved_for_user_id))
         status = f"🔴 Booked by {name}"
     else:
         status = spot.state
@@ -778,7 +786,7 @@ def display_status_for_spot(spot: SpotRecord) -> str:
             status = "🟡 Held"
 
     elif spot.state == "reserved":
-        name = display_name_for_user(spot.reserved_for_user_id)
+        name = neutral_slack_name(display_name_for_user(spot.reserved_for_user_id))
         status = f"🔴 Booked by {name}"
 
     else:
