@@ -649,7 +649,7 @@ def board_line_for_spot(spot: SpotRecord) -> str:
         status = spot.state
 
     label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
-    return f"{label} - {status}"
+    return f"{label:<7} {status}"
 
 
 def build_board_text() -> str:
@@ -715,7 +715,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
         status = spot.state
 
     label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
-    return f"{label} - {status}"
+    return f"{label:<7} {status}"
 
 
 def spot_available_to_user(spot: SpotRecord, user_id: str) -> bool:
@@ -823,13 +823,17 @@ def parking_home_blocks(user_id: str) -> list:
             )
             blocks.append({"type": "divider"})
 
-    for spot in get_all_spots():
-        blocks.append(
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": display_line_for_spot(spot)},
-            }
-        )
+    # Keep all rows in one fixed-width block so Slack draws every status dot in
+    # the same vertical column.
+    parking_rows = "\n".join(
+        display_line_for_spot(spot) for spot in get_all_spots()
+    )
+    blocks.append(
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"```{parking_rows}```"},
+        }
+    )
 
     action_elements = [
         {
