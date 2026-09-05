@@ -194,7 +194,7 @@ class ReservationDaysTests(unittest.TestCase):
             parking.M1, "reserved", reserved_for_user_id=parking.RANDY_ID
         )
         booked_status = parking.display_status_for_spot(parking.get_spot(parking.M1))
-        self.assertEqual("🔴 Booked by R. Egan", booked_status)
+        self.assertEqual("🔴 Booked by Randy Egan", booked_status)
         self.assertNotIn("@", booked_status)
 
         blocks = parking.parking_home_blocks(parking.RANDY_ID)
@@ -202,7 +202,7 @@ class ReservationDaysTests(unittest.TestCase):
             block["text"]
             for block in blocks
             if block.get("type") == "section"
-            and "Booked by R. Egan" in block.get("text", {}).get("text", "")
+            and "Booked by Randy Egan" in block.get("text", {}).get("text", "")
         ]
         self.assertEqual("plain_text", booked_rows[0]["type"])
 

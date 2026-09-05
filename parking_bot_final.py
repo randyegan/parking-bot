@@ -681,11 +681,7 @@ def display_name_for_user(user_id: Optional[str]) -> str:
 
 
 def neutral_slack_name(name: str) -> str:
-    """Keep Slack from automatically highlighting a matching profile name."""
-    parts = name.strip().split()
-    if len(parts) >= 2:
-        return f"{parts[0][0]}. {' '.join(parts[1:])}"
-
+    """Return the person's full name without Slack mention markup."""
     return name
 
 
