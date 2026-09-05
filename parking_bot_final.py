@@ -927,10 +927,9 @@ def parking_home_blocks(user_id: str) -> list:
         {"type": "section", "text": {"type": "mrkdwn", "text": "*Reserve a spot*"}}
     )
     if reserve_buttons:
-        for start in range(0, len(reserve_buttons), 3):
-            blocks.append(
-                {"type": "actions", "elements": reserve_buttons[start:start + 3]}
-            )
+        # One action block keeps all five stalls on one desktop row. Slack can
+        # still adapt the row automatically on narrower mobile screens.
+        blocks.append({"type": "actions", "elements": reserve_buttons})
     else:
         blocks.append(
             {"type": "context", "elements": [{"type": "mrkdwn", "text": "No spots available."}]}

@@ -152,11 +152,23 @@ class ReservationDaysTests(unittest.TestCase):
         self.assertNotIn("manage_t1", action_ids(staff_blocks))
 
     def test_button_rows_do_not_overflow(self):
+        parking.set_spot_state(parking.M1, "open")
+        parking.set_spot_state(parking.M2, "open")
         blocks = parking.parking_home_blocks(parking.RANDY_ID)
         action_blocks = [block for block in blocks if block["type"] == "actions"]
 
         self.assertTrue(action_blocks)
-        self.assertTrue(all(len(block["elements"]) <= 3 for block in action_blocks))
+        self.assertTrue(all(len(block["elements"]) <= 5 for block in action_blocks))
+
+        reserve_rows = [
+            block for block in action_blocks
+            if any(
+                element.get("action_id", "").startswith("reserve_spot_")
+                for element in block["elements"]
+            )
+        ]
+        self.assertEqual(1, len(reserve_rows))
+        self.assertEqual(5, len(reserve_rows[0]["elements"]))
 
     def test_reservations_use_hot_buttons_not_dropdown(self):
         blocks = parking.parking_home_blocks("U-STAFF")
