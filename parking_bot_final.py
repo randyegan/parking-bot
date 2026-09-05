@@ -56,9 +56,10 @@ DISPLAY_SPOT_NAMES = {
 }
 
 DISPLAY_NAMES = {
-    RANDY_ID: "@Randy",
-    KYLIE_ID: "@Kylie",
+    RANDY_ID: "Randy",
+    KYLIE_ID: "Kylie",
 }
+USER_NAME_CACHE = dict(DISPLAY_NAMES)
 
 MANAGEMENT_DEFAULTS = {
     RANDY_ID: M1,
@@ -654,6 +655,31 @@ def maybe_dm(user_id: str, text: str) -> None:
         pass
 
 
+def display_name_for_user(user_id: Optional[str]) -> str:
+    if not user_id:
+        return "Unknown"
+
+    cached = USER_NAME_CACHE.get(user_id)
+    if cached:
+        return cached
+
+    try:
+        user = slack_app.client.users_info(user=user_id)["user"]
+        profile = user.get("profile", {})
+        name = (
+            profile.get("display_name_normalized")
+            or profile.get("real_name_normalized")
+            or user.get("real_name")
+            or user.get("name")
+            or user_id
+        )
+    except Exception:
+        name = user_id
+
+    USER_NAME_CACHE[user_id] = name
+    return name
+
+
 # -----------------------------
 # Live board message
 # -----------------------------
@@ -675,14 +701,14 @@ def load_board_ts() -> Optional[str]:
 
 def board_line_for_spot(spot: SpotRecord) -> str:
     if spot.state == "open":
-        status = "🟢 Open"
+        status = "🟩 Open"
     elif spot.state == "held_user":
         name = DISPLAY_NAMES.get(spot.held_for_user_id, f"<@{spot.held_for_user_id}>")
         status = f"🟡 Held for {name}"
     elif spot.state == "held_group":
         status = f"🟡 {t1_held_message()}" if spot.spot_id == T1 else "🟡 Held"
     elif spot.state == "reserved":
-        name = DISPLAY_NAMES.get(spot.reserved_for_user_id, f"<@{spot.reserved_for_user_id}>")
+        name = display_name_for_user(spot.reserved_for_user_id)
         status = f"🔴 Booked by {name}"
     else:
         status = spot.state
@@ -739,7 +765,7 @@ def display_line_for_spot(spot: SpotRecord) -> str:
 
 def display_status_for_spot(spot: SpotRecord) -> str:
     if spot.state == "open":
-        status = "🟢 Open"
+        status = "🟩 Open"
 
     elif spot.state == "held_user":
         name = DISPLAY_NAMES.get(spot.held_for_user_id, f"<@{spot.held_for_user_id}>")
@@ -752,7 +778,7 @@ def display_status_for_spot(spot: SpotRecord) -> str:
             status = "🟡 Held"
 
     elif spot.state == "reserved":
-        name = DISPLAY_NAMES.get(spot.reserved_for_user_id, f"<@{spot.reserved_for_user_id}>")
+        name = display_name_for_user(spot.reserved_for_user_id)
         status = f"🔴 Booked by {name}"
 
     else:

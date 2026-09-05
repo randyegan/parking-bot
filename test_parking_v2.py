@@ -186,6 +186,17 @@ class ReservationDaysTests(unittest.TestCase):
         ]
         self.assertEqual(len(action_ids), len(set(action_ids)))
 
+    def test_status_uses_dark_green_square_and_plain_names(self):
+        open_status = parking.display_status_for_spot(parking.get_spot(parking.P1))
+        self.assertEqual("🟩 Open", open_status)
+
+        parking.set_spot_state(
+            parking.M1, "reserved", reserved_for_user_id=parking.RANDY_ID
+        )
+        booked_status = parking.display_status_for_spot(parking.get_spot(parking.M1))
+        self.assertEqual("🔴 Booked by Randy", booked_status)
+        self.assertNotIn("@", booked_status)
+
 
 if __name__ == "__main__":
     unittest.main()
