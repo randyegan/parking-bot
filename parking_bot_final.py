@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import sqlite3
 from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
@@ -819,7 +820,7 @@ def parking_home_blocks(user_id: str) -> list:
         {
             "type": "button",
             "text": {"type": "plain_text", "text": DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)},
-            "action_id": "reserve_spot_button",
+            "action_id": f"reserve_spot_{spot.spot_id}",
             "value": spot.spot_id,
             "style": "primary",
         }
@@ -1134,7 +1135,7 @@ def reserve_spot_select_action(ack, body):
     maybe_dm(user_id, f":parking: {message}")
 
 
-@slack_app.action("reserve_spot_button")
+@slack_app.action(re.compile(r"^reserve_spot_(M1|M2|P1|P2|P3)$"))
 def reserve_spot_button_action(ack, body):
     ack()
 
@@ -1407,6 +1408,7 @@ async def lifespan(app: FastAPI):
     init_db()
     apply_v2_weekend_migration()
     clear_expired_away_dates()
+    publish_home_all_users()
     update_parking_board()
 
     scheduler = BackgroundScheduler(timezone=PARKING_TIMEZONE)

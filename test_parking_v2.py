@@ -166,8 +166,13 @@ class ReservationDaysTests(unittest.TestCase):
             for element in block.get("elements", [])
         ]
 
-        self.assertTrue(any(e.get("action_id") == "reserve_spot_button" for e in elements))
+        self.assertTrue(any(e.get("action_id", "").startswith("reserve_spot_") for e in elements))
         self.assertFalse(any(e.get("type") == "static_select" for e in elements))
+
+        action_ids = [
+            e["action_id"] for e in elements if e.get("action_id", "").startswith("reserve_spot_")
+        ]
+        self.assertEqual(len(action_ids), len(set(action_ids)))
 
 
 if __name__ == "__main__":
