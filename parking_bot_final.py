@@ -893,8 +893,9 @@ def parking_home_blocks(user_id: str) -> list:
             {
                 "type": "section",
                 "text": {
-                    "type": "mrkdwn",
-                    "text": f"{icon}  *{label}*  {description}",
+                    "type": "plain_text",
+                    "text": f"{icon}  {label}  {description}",
+                    "emoji": True,
                 },
             }
         )

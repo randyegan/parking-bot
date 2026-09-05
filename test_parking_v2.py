@@ -197,6 +197,15 @@ class ReservationDaysTests(unittest.TestCase):
         self.assertEqual("🔴 Booked by Randy", booked_status)
         self.assertNotIn("@", booked_status)
 
+        blocks = parking.parking_home_blocks(parking.RANDY_ID)
+        booked_rows = [
+            block["text"]
+            for block in blocks
+            if block.get("type") == "section"
+            and "Booked by Randy" in block.get("text", {}).get("text", "")
+        ]
+        self.assertEqual("plain_text", booked_rows[0]["type"])
+
 
 if __name__ == "__main__":
     unittest.main()
