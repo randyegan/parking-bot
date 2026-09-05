@@ -865,17 +865,17 @@ def parking_home_blocks(user_id: str) -> list:
             )
             blocks.append({"type": "divider"})
 
-    # Keep the status close to the stall label at Slack's normal text size.
-    # Every displayed label has the same character count, so the compact rows
-    # remain visually aligned without Slack's wide two-column field spacing.
+    # Put the status dot first so all dots share the exact same vertical line,
+    # independent of Slack's proportional font widths.
     for spot in get_all_spots():
         label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
+        icon, description = display_status_for_spot(spot).split(" ", 1)
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*{label}*  {display_status_for_spot(spot)}",
+                    "text": f"{icon}  *{label}*  {description}",
                 },
             }
         )
@@ -933,15 +933,19 @@ def parking_home_blocks(user_id: str) -> list:
         }
     )
 
-    blocks.extend(
-        [
-            {"type": "divider"},
-            {
-                "type": "actions",
-                "elements": action_elements,
-            },
-        ]
-    )
+    # Slack compresses long action rows behind a “2+” menu. Use short rows so
+    # every control stays visible, with management-only controls kept separate.
+    primary_actions = action_elements[:3]
+    management_actions = action_elements[3:-1] if user_id in MANAGEMENT_DEFAULTS else []
+    notification_action = action_elements[-1:]
+
+    blocks.append({"type": "divider"})
+    blocks.append({"type": "actions", "elements": primary_actions})
+
+    if management_actions:
+        blocks.append({"type": "actions", "elements": management_actions})
+
+    blocks.append({"type": "actions", "elements": notification_action})
 
     return blocks
 

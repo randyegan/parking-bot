@@ -137,6 +137,27 @@ class ReservationDaysTests(unittest.TestCase):
         parking.set_t1_control("open")
         self.assertFalse(parking.spot_available_to_user(parking.get_spot(parking.T1), parking.RANDY_ID))
 
+    def test_t1_management_button_is_management_only(self):
+        manager_blocks = parking.parking_home_blocks(parking.RANDY_ID)
+        staff_blocks = parking.parking_home_blocks("U-STAFF")
+
+        def action_ids(blocks):
+            return {
+                element.get("action_id")
+                for block in blocks
+                for element in block.get("elements", [])
+            }
+
+        self.assertIn("manage_t1", action_ids(manager_blocks))
+        self.assertNotIn("manage_t1", action_ids(staff_blocks))
+
+    def test_button_rows_do_not_overflow(self):
+        blocks = parking.parking_home_blocks(parking.RANDY_ID)
+        action_blocks = [block for block in blocks if block["type"] == "actions"]
+
+        self.assertTrue(action_blocks)
+        self.assertTrue(all(len(block["elements"]) <= 3 for block in action_blocks))
+
 
 if __name__ == "__main__":
     unittest.main()
