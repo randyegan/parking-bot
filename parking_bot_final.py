@@ -865,17 +865,18 @@ def parking_home_blocks(user_id: str) -> list:
             )
             blocks.append({"type": "divider"})
 
-    # Two consistent fields keep every dot in one vertical column while using
-    # Slack's normal text size.
+    # Keep the status close to the stall label at Slack's normal text size.
+    # Every displayed label has the same character count, so the compact rows
+    # remain visually aligned without Slack's wide two-column field spacing.
     for spot in get_all_spots():
         label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
         blocks.append(
             {
                 "type": "section",
-                "fields": [
-                    {"type": "mrkdwn", "text": f"*{label}*"},
-                    {"type": "mrkdwn", "text": display_status_for_spot(spot)},
-                ],
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{label}*  {display_status_for_spot(spot)}",
+                },
             }
         )
 
