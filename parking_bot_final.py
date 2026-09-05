@@ -56,8 +56,8 @@ DISPLAY_SPOT_NAMES = {
 }
 
 DISPLAY_NAMES = {
-    RANDY_ID: "Randy",
-    KYLIE_ID: "Kylie",
+    RANDY_ID: "Randy Egan",
+    KYLIE_ID: "Kylie Kumar",
 }
 USER_NAME_CACHE = dict(DISPLAY_NAMES)
 
@@ -667,8 +667,8 @@ def display_name_for_user(user_id: Optional[str]) -> str:
         user = slack_app.client.users_info(user=user_id)["user"]
         profile = user.get("profile", {})
         name = (
-            profile.get("display_name_normalized")
-            or profile.get("real_name_normalized")
+            profile.get("real_name_normalized")
+            or profile.get("display_name_normalized")
             or user.get("real_name")
             or user.get("name")
             or user_id
@@ -682,10 +682,11 @@ def display_name_for_user(user_id: Optional[str]) -> str:
 
 def neutral_slack_name(name: str) -> str:
     """Keep Slack from automatically highlighting a matching profile name."""
-    if len(name) < 2:
-        return name
+    parts = name.strip().split()
+    if len(parts) >= 2:
+        return f"{parts[0][0]}. {' '.join(parts[1:])}"
 
-    return f"{name[0]}\u200b{name[1:]}"
+    return name
 
 
 # -----------------------------
