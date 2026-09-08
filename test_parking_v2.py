@@ -299,16 +299,23 @@ class ReservationDaysTests(unittest.TestCase):
         self.assertEqual("🔴 Booked by Pat", parking.display_status_for_spot(spot))
         parking.slack_app.client.users_info.assert_called_once_with(user="U-PAT")
 
-    def test_name_lookup_fallback_never_exposes_slack_id(self):
+    def test_name_lookup_fallback_uses_slack_rendered_name(self):
         parking.slack_app.client.reset_mock()
         parking.slack_app.client.users_info.side_effect = RuntimeError("Slack unavailable")
         parking.set_spot_state(parking.P1, "reserved", reserved_for_user_id="U-SECRET")
 
         status = parking.display_status_for_spot(parking.get_spot(parking.P1))
 
-        self.assertEqual("🔴 Booked by Unknown", status)
-        self.assertNotIn("U-SECRET", status)
+        self.assertEqual("🔴 Booked by <@U-SECRET>", status)
         self.assertNotIn("U-SECRET", parking.USER_NAME_CACHE)
+
+        blocks = parking.parking_home_blocks(parking.RANDY_ID)
+        fallback_row = next(
+            block for block in blocks
+            if block.get("type") == "section"
+            and "<@U-SECRET>" in block.get("text", {}).get("text", "")
+        )
+        self.assertEqual("mrkdwn", fallback_row["text"]["type"])
 
 
 if __name__ == "__main__":

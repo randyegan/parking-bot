@@ -625,9 +625,10 @@ def display_name_for_user(user_id: Optional[str]) -> str:
             else "Unknown"
         )
     except Exception:
-        # Do not expose Slack IDs in the UI, and do not cache a failed lookup so
-        # a later refresh can recover from a transient Slack API error.
-        return "Unknown"
+        # Let Slack render its own user reference when profile lookup is not
+        # available. This displays the workspace name instead of a raw ID and
+        # still allows a later refresh to recover after a transient API error.
+        return f"<@{user_id}>"
 
     if name != "Unknown":
         USER_NAME_CACHE[user_id] = name
@@ -840,14 +841,16 @@ def parking_home_blocks(user_id: str) -> list:
     for spot in get_all_spots():
         label = DISPLAY_SPOT_NAMES.get(spot.spot_id, spot.spot_id)
         icon, description = display_status_for_spot(spot).split(" ", 1)
+        text = {
+            "type": "mrkdwn" if "<@" in description else "plain_text",
+            "text": f"{icon}  {label}  {description}",
+        }
+        if text["type"] == "plain_text":
+            text["emoji"] = True
         blocks.append(
             {
                 "type": "section",
-                "text": {
-                    "type": "plain_text",
-                    "text": f"{icon}  {label}  {description}",
-                    "emoji": True,
-                },
+                "text": text,
             }
         )
 
