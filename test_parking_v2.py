@@ -34,6 +34,8 @@ class ReservationDaysTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         parking.DATABASE_PATH = os.path.join(self.temp_dir.name, "parking.db")
+        parking.slack_app.client.reset_mock(return_value=True, side_effect=True)
+        parking.USER_NAME_CACHE.clear()
         parking.init_db()
 
     def tearDown(self):
@@ -271,6 +273,42 @@ class ReservationDaysTests(unittest.TestCase):
             and "Booked by Randy" in block.get("text", {}).get("text", "")
         ]
         self.assertEqual("plain_text", booked_rows[0]["type"])
+
+    def test_configured_management_names_do_not_call_slack(self):
+        parking.slack_app.client.reset_mock()
+
+        self.assertEqual("Randy", parking.display_name_for_user(parking.RANDY_ID))
+        self.assertEqual("Kylie", parking.display_name_for_user(parking.KYLIE_ID))
+        parking.slack_app.client.users_info.assert_not_called()
+
+    def test_slack_first_name_is_shared_by_board_and_home(self):
+        parking.slack_app.client.reset_mock()
+        parking.slack_app.client.users_info.return_value = {
+            "user": {
+                "name": "pat.lee",
+                "profile": {
+                    "first_name": "Pat",
+                    "real_name_normalized": "Pat Lee",
+                },
+            }
+        }
+        parking.set_spot_state(parking.P1, "reserved", reserved_for_user_id="U-PAT")
+        spot = parking.get_spot(parking.P1)
+
+        self.assertEqual("P1-#08  🔴 Booked by Pat", parking.board_line_for_spot(spot))
+        self.assertEqual("🔴 Booked by Pat", parking.display_status_for_spot(spot))
+        parking.slack_app.client.users_info.assert_called_once_with(user="U-PAT")
+
+    def test_name_lookup_fallback_never_exposes_slack_id(self):
+        parking.slack_app.client.reset_mock()
+        parking.slack_app.client.users_info.side_effect = RuntimeError("Slack unavailable")
+        parking.set_spot_state(parking.P1, "reserved", reserved_for_user_id="U-SECRET")
+
+        status = parking.display_status_for_spot(parking.get_spot(parking.P1))
+
+        self.assertEqual("🔴 Booked by Unknown", status)
+        self.assertNotIn("U-SECRET", status)
+        self.assertNotIn("U-SECRET", parking.USER_NAME_CACHE)
 
 
 if __name__ == "__main__":

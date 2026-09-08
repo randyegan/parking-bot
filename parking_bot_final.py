@@ -59,7 +59,7 @@ DISPLAY_NAMES = {
     RANDY_ID: "Randy Egan",
     KYLIE_ID: "Kylie Kumar",
 }
-USER_NAME_CACHE = dict(DISPLAY_NAMES)
+USER_NAME_CACHE = {}
 
 MANAGEMENT_DEFAULTS = {
     RANDY_ID: M1,
@@ -595,8 +595,13 @@ def send_dm(user_id: str, text: str) -> None:
 
 
 def display_name_for_user(user_id: Optional[str]) -> str:
+    """Return a plain first name for parking displays."""
     if not user_id:
         return "Unknown"
+
+    configured_name = DISPLAY_NAMES.get(user_id)
+    if configured_name:
+        return configured_name.strip().split()[0]
 
     cached = USER_NAME_CACHE.get(user_id)
     if cached:
@@ -605,23 +610,28 @@ def display_name_for_user(user_id: Optional[str]) -> str:
     try:
         user = slack_app.client.users_info(user=user_id)["user"]
         profile = user.get("profile", {})
-        name = (
-            profile.get("real_name_normalized")
+        full_name = (
+            profile.get("first_name")
             or profile.get("display_name_normalized")
+            or profile.get("display_name")
+            or profile.get("real_name_normalized")
+            or profile.get("real_name")
             or user.get("real_name")
             or user.get("name")
-            or user_id
+        )
+        name = (
+            full_name.strip().split()[0]
+            if full_name and full_name.strip()
+            else "Unknown"
         )
     except Exception:
-        name = user_id
+        # Do not expose Slack IDs in the UI, and do not cache a failed lookup so
+        # a later refresh can recover from a transient Slack API error.
+        return "Unknown"
 
-    USER_NAME_CACHE[user_id] = name
+    if name != "Unknown":
+        USER_NAME_CACHE[user_id] = name
     return name
-
-
-def neutral_slack_name(name: str) -> str:
-    """Return the person's first name without Slack mention markup."""
-    return name.strip().split()[0] if name.strip() else "Unknown"
 
 
 # -----------------------------
@@ -652,7 +662,7 @@ def board_line_for_spot(spot: SpotRecord) -> str:
     elif spot.state == "held_group":
         status = f"🟡 {t1_held_message()}" if spot.spot_id == T1 else "🟡 Held"
     elif spot.state == "reserved":
-        name = neutral_slack_name(display_name_for_user(spot.reserved_for_user_id))
+        name = display_name_for_user(spot.reserved_for_user_id)
         status = f"🔴 Booked by {name}"
     else:
         status = spot.state
@@ -722,7 +732,7 @@ def display_status_for_spot(spot: SpotRecord) -> str:
             status = "🟡 Held"
 
     elif spot.state == "reserved":
-        name = neutral_slack_name(display_name_for_user(spot.reserved_for_user_id))
+        name = display_name_for_user(spot.reserved_for_user_id)
         status = f"🔴 Booked by {name}"
 
     else:
