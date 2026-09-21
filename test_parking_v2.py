@@ -127,6 +127,78 @@ class ReservationDaysTests(unittest.TestCase):
         self.assertEqual("open", parking.get_spot(parking.M1).state)
         self.assertEqual("open", parking.get_spot(parking.M2).state)
 
+    def test_reset_schedule_includes_sunday_but_not_saturday(self):
+        self.assertEqual("mon-fri,sun", parking.RESET_CRON_DAYS)
+
+    def test_saturday_keeps_friday_weekend_state(self):
+        friday = parking.datetime(2026, 9, 4, 17, 0, tzinfo=ZoneInfo("America/Vancouver"))
+        saturday = parking.datetime(2026, 9, 5, 12, 0, tzinfo=ZoneInfo("America/Vancouver"))
+
+        with patch.object(parking, "local_now", return_value=friday):
+            parking.reset_for_5pm()
+
+        parking.set_spot_state(parking.M1, "reserved", reserved_for_user_id="U-WEEKEND")
+
+        with patch.object(parking, "local_now", return_value=saturday):
+            parking.apply_v2_weekend_migration()
+
+        self.assertEqual("U-WEEKEND", parking.get_spot(parking.M1).reserved_for_user_id)
+        self.assertEqual("open", parking.get_spot(parking.M2).state)
+
+    def test_sunday_5pm_prepares_monday_management_defaults(self):
+        sunday = parking.datetime(2026, 9, 6, 17, 0, tzinfo=ZoneInfo("America/Vancouver"))
+        parking.set_spot_state(parking.M1, "reserved", reserved_for_user_id="U-WEEKEND")
+        parking.set_spot_state(parking.M2, "open")
+
+        with patch.object(parking, "local_now", return_value=sunday):
+            parking.reset_for_5pm()
+
+        self.assertEqual(parking.RANDY_ID, parking.get_spot(parking.M1).reserved_for_user_id)
+        self.assertEqual(parking.KYLIE_ID, parking.get_spot(parking.M2).reserved_for_user_id)
+        self.assertEqual("open", parking.get_spot(parking.P1).state)
+        self.assertEqual("held_group", parking.get_spot(parking.T1).state)
+
+    def test_sunday_5pm_respects_monday_away_dates(self):
+        sunday = parking.datetime(2026, 9, 6, 17, 0, tzinfo=ZoneInfo("America/Vancouver"))
+        parking.set_user_away(parking.RANDY_ID, "2026-09-07", "2026-09-07")
+
+        with patch.object(parking, "local_now", return_value=sunday):
+            parking.reset_for_5pm()
+
+        self.assertEqual("open", parking.get_spot(parking.M1).state)
+        self.assertEqual(parking.KYLIE_ID, parking.get_spot(parking.M2).reserved_for_user_id)
+
+    def test_monday_before_5pm_keeps_defaults_prepared_on_sunday(self):
+        sunday = parking.datetime(2026, 9, 6, 17, 0, tzinfo=ZoneInfo("America/Vancouver"))
+        monday = parking.datetime(2026, 9, 7, 16, 59, tzinfo=ZoneInfo("America/Vancouver"))
+
+        with patch.object(parking, "local_now", return_value=sunday):
+            parking.reset_for_5pm()
+
+        with patch.object(parking, "local_now", return_value=monday):
+            self.assertEqual("today", parking.booking_day_text())
+            self.assertEqual(parking.RANDY_ID, parking.get_spot(parking.M1).reserved_for_user_id)
+            self.assertEqual(parking.KYLIE_ID, parking.get_spot(parking.M2).reserved_for_user_id)
+
+    def test_monday_at_and_after_5pm_keeps_management_defaults(self):
+        for hour, minute in ((17, 0), (18, 30)):
+            with self.subTest(hour=hour, minute=minute):
+                monday = parking.datetime(
+                    2026, 9, 7, hour, minute, tzinfo=ZoneInfo("America/Vancouver")
+                )
+                parking.set_spot_state(parking.M1, "open")
+                parking.set_spot_state(parking.M2, "open")
+
+                with patch.object(parking, "local_now", return_value=monday):
+                    parking.reset_for_5pm()
+
+                self.assertEqual(
+                    parking.RANDY_ID, parking.get_spot(parking.M1).reserved_for_user_id
+                )
+                self.assertEqual(
+                    parking.KYLIE_ID, parking.get_spot(parking.M2).reserved_for_user_id
+                )
+
     def test_weekend_migration_opens_defaults_only_once(self):
         saturday = parking.datetime(2026, 9, 5, 9, 0, tzinfo=ZoneInfo("America/Vancouver"))
 

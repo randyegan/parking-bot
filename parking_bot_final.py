@@ -23,6 +23,7 @@ from slack_bolt.adapter.fastapi import SlackRequestHandler
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
 PARKING_TIMEZONE = os.getenv("PARKING_TIMEZONE", "America/Vancouver")
+RESET_CRON_DAYS = "mon-fri,sun"
 DATABASE_PATH = os.getenv("DATABASE_PATH", "/data/parking.db")
 PARKING_CHANNEL_ID = os.getenv("PARKING_CHANNEL_ID", "")
 BOARD_TS_FILE = os.getenv("BOARD_TS_FILE", "/data/board_ts.txt")
@@ -998,8 +999,8 @@ def release_for_user(user_id: str) -> str:
 
 
 def reset_for_5pm() -> None:
-    # Friday evening prepares the weekend. Management defaults resume at the
-    # Monday reset, which prepares Tuesday under the app's after-5 PM model.
+    # Friday evening prepares the weekend. The Sunday reset prepares Monday,
+    # and weekday resets prepare the following business day.
     if local_now().weekday() == 4:
         set_spot_state(M1, "open")
         set_spot_state(M2, "open")
@@ -1358,7 +1359,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         scheduled_5pm_reset,
         "cron",
-        day_of_week="mon-fri",
+        day_of_week=RESET_CRON_DAYS,
         hour=17,
         minute=0,
     )
